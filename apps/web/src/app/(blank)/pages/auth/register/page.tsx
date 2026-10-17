@@ -1,7 +1,3 @@
-import Register from '@/views/pages/auth/register'
+import { redirect } from 'next/navigation'
 
-const RegisterPage = () => {
-  return <Register />
-}
-
-export default RegisterPage
+export default function RegisterPage() { redirect('/pages/auth/login') }

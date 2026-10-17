@@ -1,6 +1,4 @@
-import Link from 'next/link'
 import {
-  ArrowUpRight,
   BriefcaseBusiness,
   CalendarClock,
   CheckSquare2,
@@ -38,9 +36,8 @@ export default function DashboardPage() {
     <div className='space-y-6'>
       <div className='flex flex-wrap items-end justify-between gap-3'>
         <div>
-          <p className='text-sm text-muted-foreground'>Thursday, October 15, 2026</p>
-          <h1 className='mt-1 text-2xl font-semibold tracking-tight'>Good morning, Jordan</h1>
-          <p className='mt-1 text-muted-foreground'>Here’s what needs your attention across the firm.</p>
+          <h1 className='text-2xl font-semibold tracking-tight'>Workspace overview</h1>
+          <p className='mt-1 text-muted-foreground'>Illustrative legal operations data for the workspace preview.</p>
         </div>
         <Badge variant='outline' className='gap-1.5'><span className='size-1.5 rounded-full bg-amber-500' /> Demo workspace</Badge>
       </div>
@@ -70,7 +67,7 @@ export default function DashboardPage() {
               <CardTitle>Matter portfolio</CardTitle>
               <CardDescription>128 sample matters by current stage</CardDescription>
             </div>
-            <Link href='/matters' className='inline-flex items-center gap-1 text-sm text-primary hover:underline'>View matters <ArrowUpRight className='size-4' /></Link>
+            <span className='text-xs text-muted-foreground'>Sample records</span>
           </CardHeader>
           <CardContent className='grid items-center gap-4 sm:grid-cols-[1fr_1fr]'>
             <MatterStatusChart />
@@ -111,7 +108,7 @@ export default function DashboardPage() {
                 </div>
               </div>
             ))}
-            <Link href='/apps/calendar' className='inline-flex items-center gap-1 pt-3 text-sm text-primary hover:underline'>Open calendar <ArrowUpRight className='size-4' /></Link>
+            <p className='pt-3 text-xs text-muted-foreground'>Illustrative calendar entries</p>
           </CardContent>
         </Card>
       </section>
@@ -122,7 +119,7 @@ export default function DashboardPage() {
             <CardTitle>Recent matter activity</CardTitle>
             <CardDescription>Updates from the sample workspace</CardDescription>
           </div>
-          <Link href='/matters' className='inline-flex items-center gap-1 text-sm text-primary hover:underline'>All matters <ArrowUpRight className='size-4' /></Link>
+          <span className='text-xs text-muted-foreground'>Sample records</span>
         </CardHeader>
         <CardContent className='px-0'>
           <div className='overflow-x-auto'>

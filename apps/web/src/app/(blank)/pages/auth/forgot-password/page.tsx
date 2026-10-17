@@ -1,7 +1,3 @@
-import ForgotPassword from '@/views/pages/auth/forgot-password'
+import { redirect } from 'next/navigation'
 
-const ForgotPasswordPage = () => {
-  return <ForgotPassword />
-}
-
-export default ForgotPasswordPage
+export default function ForgotPasswordPage() { redirect('/pages/auth/login') }
