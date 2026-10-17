@@ -1,79 +1,53 @@
-// Next Imports
-import Link from 'next/link'
+'use client'
 
-// Third-party Imports
-import { LogOutIcon, SettingsIcon, UserIcon } from 'lucide-react'
-
-// Component Imports
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { LogOutIcon, UserIcon } from 'lucide-react'
+import { useAuth } from '@/components/auth/AuthProvider'
+import { api, ApiError } from '@/lib/api'
+import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 
-const STATIC_USER = {
-  fullName: 'Jordan Ellis',
-  email: 'jordan.ellis@example.com',
-  imageUrl: '/images/avatars/avatar-1.webp',
-  initials: 'JE'
-}
+const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(part => part[0]?.toUpperCase()).join('') || 'JM'
 
 const ProfileDropdown = () => {
+  const { user, clear } = useAuth()
+  const router = useRouter()
+  const [error, setError] = useState<string | null>(null)
+
+  const logout = async () => {
+    setError(null)
+    try {
+      await api.logout()
+    } catch (reason) {
+      if (!(reason instanceof ApiError && reason.status === 401)) {
+        setError('Could not reach the service to end your session. Try again when connected.')
+        return
+      }
+    }
+    clear()
+    router.replace('/')
+  }
+
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger
-        render={<Button variant='ghost' size='icon' className='relative rounded-full hover:bg-transparent' />}
-      >
-        <Avatar>
-          <AvatarImage src={STATIC_USER.imageUrl} alt={STATIC_USER.fullName} />
-          <AvatarFallback>{STATIC_USER.initials}</AvatarFallback>
-        </Avatar>
+      <DropdownMenuTrigger render={<Button variant='ghost' size='icon' aria-label='Account menu' className='relative rounded-full hover:bg-transparent' />}>
+        <Avatar><AvatarFallback>{initials(user?.fullName ?? '')}</AvatarFallback></Avatar>
         <span className='ring-card absolute right-0 bottom-0 block size-2 rounded-full bg-green-600 ring-2' />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align='end' className='w-60'>
+      <DropdownMenuContent align='end' className='w-64'>
         <DropdownMenuGroup>
-          <DropdownMenuLabel className='flex items-center gap-4 px-2 py-2.5 font-normal'>
-            <div className='relative'>
-              <Avatar className='size-10'>
-                <AvatarImage src={STATIC_USER.imageUrl} alt={STATIC_USER.fullName} />
-                <AvatarFallback>{STATIC_USER.initials}</AvatarFallback>
-              </Avatar>
-              <span className='ring-card absolute right-0 bottom-0 block size-2 rounded-full bg-green-600 ring-2' />
-            </div>
-            <div className='flex flex-1 flex-col items-start'>
-              <span className='text-foreground text-base font-semibold'>{STATIC_USER.fullName}</span>
-              <span className='text-muted-foreground text-sm'>{STATIC_USER.email}</span>
-            </div>
+          <DropdownMenuLabel className='flex items-center gap-3 px-2 py-2.5 font-normal'>
+            <Avatar className='size-10'><AvatarFallback>{initials(user?.fullName ?? '')}</AvatarFallback></Avatar>
+            <span className='flex min-w-0 flex-col'><span className='truncate text-sm font-semibold'>{user?.fullName}</span><span className='truncate text-xs text-muted-foreground'>{user?.email}</span></span>
           </DropdownMenuLabel>
         </DropdownMenuGroup>
-
         <DropdownMenuSeparator />
-
-        <DropdownMenuGroup>
-          <DropdownMenuItem render={<Link href='/pages/user-profile?view=profile' />}>
-            <UserIcon />
-            <span>My Account</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem render={<Link href='/pages/user-settings?setting=general' />}>
-            <SettingsIcon />
-            <span>Settings</span>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-
+        <DropdownMenuItem onClick={() => router.push('/workspaces')}><UserIcon /><span>Choose workspace</span></DropdownMenuItem>
+        {error && <DropdownMenuLabel className='whitespace-normal text-xs text-destructive' role='alert'>{error}</DropdownMenuLabel>}
         <DropdownMenuSeparator />
-
-        <DropdownMenuGroup>
-          <DropdownMenuItem variant='destructive' render={<Link href='/pages/auth/login' />}>
-            <LogOutIcon />
-            <span>Open sign-in preview</span>
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
+        <DropdownMenuItem variant='destructive' onClick={() => void logout()}><LogOutIcon /><span>Sign out</span></DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   )

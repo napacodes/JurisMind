@@ -4,17 +4,29 @@
   "private": true,
   "scripts": {
     "dev": "nest start --watch",
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "start": "node dist/main.js",
     "lint": "eslint src",
     "typecheck": "tsc --noEmit",
-    "test": "node -e \"console.log('No API tests configured yet')\"",
-    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\""
+    "test": "tsx --test test/auth.spec.ts test/authorization.spec.ts test/config.spec.ts",
+    "test:integration": "tsx --test --test-concurrency=1 test/auth.integration.spec.ts test/authorization.integration.spec.ts test/memberships.integration.spec.ts test/invitations.integration.spec.ts test/individual-practice.integration.spec.ts",
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "db:validate": "prisma validate",
+    "db:generate": "prisma generate",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:status": "prisma migrate status",
+    "db:verify-constraints": "node scripts/verify-db-constraints.cjs"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
+    "@prisma/adapter-pg": "^7.0.0",
+    "@prisma/client": "^7.0.0",
+    "argon2": "^0.45.1",
+    "dotenv": "^16.4.7",
+    "pg": "^8.16.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.0"
   },
@@ -25,7 +37,9 @@
     "@types/express": "^5.0.0",
     "@types/node": "^24.0.0",
     "eslint": "^9.0.0",
-    "typescript-eslint": "^8.0.0",
-    "typescript": "^5.9.0"
+    "prisma": "^7.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.0.0"
   }
 }

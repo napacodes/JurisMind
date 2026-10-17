@@ -3,7 +3,7 @@
 // Next Imports
 import { Fragment } from 'react'
 
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 
 // Third-party Imports
 
@@ -20,9 +20,15 @@ import {
 } from '@/components/ui/breadcrumb'
 import { Separator } from '@/components/ui/separator'
 import { SidebarTrigger } from '@/components/ui/sidebar'
+import { useAuth } from '@/components/auth/AuthProvider'
 
 const Header = () => {
   const pathname = usePathname()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const { workspaces } = useAuth()
+  const selectedId = searchParams.get('workspaceId')
+  const selectedWorkspace = workspaces.find(workspace => workspace.id === selectedId) ?? workspaces[0]
 
   const segments = pathname.split('/').filter(Boolean)
 
@@ -52,6 +58,12 @@ const Header = () => {
           </Breadcrumb>
         </div>
         <div className='flex items-center gap-1.5'>
+          {selectedWorkspace && workspaces.length > 1 && <label className='sr-only' htmlFor='active-workspace'>Active workspace</label>}
+          {selectedWorkspace && workspaces.length > 1 && <select id='active-workspace' aria-label='Workspace context'
+            value={selectedWorkspace.id} onChange={event => router.replace(`/dashboard?workspaceId=${encodeURIComponent(event.target.value)}`)}
+            className='h-9 max-w-36 rounded-md border bg-background px-2 text-xs sm:max-w-52 sm:text-sm'>
+            {workspaces.map(workspace => <option key={workspace.id} value={workspace.id}>{workspace.name} · {workspace.kind === 'FIRM' ? 'Firm' : 'Individual'}</option>)}
+          </select>}
           <ModeToggle />
           <ProfileDropdown />
         </div>

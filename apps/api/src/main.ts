@@ -1,13 +1,20 @@
 import "reflect-metadata";
+import "dotenv/config";
 import { NestFactory } from "@nestjs/core";
+import { json, urlencoded } from "express";
 import { AppModule } from "./app.module";
+import { validateEnvironment } from "./config/env.validation";
+import { configureCors } from "./config/cors";
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule);
+  const environment = validateEnvironment(process.env);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  app.use(json({ limit: "16kb", strict: true }));
+  app.use(urlencoded({ extended: false, limit: "16kb" }));
+  configureCors(app, environment.trustedOrigins);
   app.enableShutdownHooks();
 
-  const port = Number(process.env.PORT ?? 4000);
-  await app.listen(port, "0.0.0.0");
+  await app.listen(environment.port, "0.0.0.0");
 }
 
 void bootstrap();

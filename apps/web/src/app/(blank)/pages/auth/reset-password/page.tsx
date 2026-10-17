@@ -1,7 +1,3 @@
-import ResetPassword from '@/views/pages/auth/reset-password'
+import { redirect } from 'next/navigation'
 
-const ResetPasswordPage = () => {
-  return <ResetPassword />
-}
-
-export default ResetPasswordPage
+export default function ResetPasswordPage() { redirect('/pages/auth/login') }
