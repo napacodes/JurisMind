@@ -1,7 +1,7 @@
 import { Inject, Injectable, UnauthorizedException } from "@nestjs/common";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { PrismaService } from "../database/prisma.service";
-import { AUTH_ENVIRONMENT, AuthEnvironment, LoginResult, SafeUserIdentity } from "./auth.types";
+import { AUTH_ENVIRONMENT, AuthEnvironment, LoginOutcome, LoginResult, SafeUserIdentity } from "./auth.types";
 import { LoginRateLimiterService } from "./login-rate-limiter.service";
 import { PasswordHasherService } from "./password-hasher.service";
 
@@ -23,7 +23,7 @@ export class AuthService {
     @Inject(AUTH_ENVIRONMENT) private readonly environment: AuthEnvironment,
   ) {}
 
-  async login(rawPayload: unknown, remoteAddress: string, requestId: string): Promise<LoginResult> {
+  async login(rawPayload: unknown, remoteAddress: string, requestId: string): Promise<LoginOutcome> {
     const payload = this.parseLoginPayload(rawPayload);
     const normalizedEmail = payload?.email ?? "<invalid-login>";
     if (this.rateLimiter.isBlocked(normalizedEmail, remoteAddress)) {
@@ -43,6 +43,25 @@ export class AuthService {
     }
 
     this.rateLimiter.clearIdentifier(normalizedEmail);
+    const mfa = await this.prisma.userMfa.findUnique({ where: { userId: user.id } });
+    if (mfa?.enabledAt && mfa.secretCiphertext) {
+      const rawChallengeToken = randomBytes(32).toString("base64url");
+      const expiresAt = new Date(Date.now() + 5 * 60_000);
+      await this.prisma.$transaction(async (transaction) => {
+        await transaction.loginMfaChallenge.create({ data: {
+          userId: user.id,
+          tokenHash: hashSessionToken(rawChallengeToken),
+          expiresAt,
+        } });
+        await transaction.securityAuditEvent.create({ data: {
+          actorUserId: user.id,
+          eventType: "AUTH_MFA_CHALLENGE_ISSUED",
+          requestId,
+          metadata: { expiresAt: expiresAt.toISOString() },
+        } });
+      });
+      return { mfaRequired: true, rawChallengeToken, expiresAt };
+    }
     const rawSessionToken = randomBytes(32).toString("base64url");
     const tokenHash = hashSessionToken(rawSessionToken);
     const sessionId = randomUUID();
@@ -67,6 +86,17 @@ export class AuthService {
     });
 
     return { user: safeUser, rawSessionToken, expiresAt };
+  }
+
+  async createVerifiedSession(user: SafeUserIdentity, requestId: string): Promise<LoginResult> {
+    const rawSessionToken = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + this.environment.sessionTtlSeconds * 1000);
+    const id = randomUUID();
+    await this.prisma.$transaction(async (transaction) => {
+      await transaction.userSession.create({ data: { id, userId: user.id, tokenHash: hashSessionToken(rawSessionToken), expiresAt } });
+      await transaction.securityAuditEvent.create({ data: { actorUserId: user.id, eventType: "AUTH_LOGIN_SUCCEEDED", targetType: "UserSession", targetId: id, requestId, metadata: { mfaVerified: true, expiresAt: expiresAt.toISOString() } } });
+    });
+    return { user, rawSessionToken, expiresAt };
   }
 
   async currentUser(rawSessionToken: string | undefined): Promise<SafeUserIdentity | null> {

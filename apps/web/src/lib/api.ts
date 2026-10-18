@@ -91,9 +91,17 @@ function requestHeaders(): HeadersInit {
 }
 
 export const api = {
-  login: (email: string, password: string) => apiRequest<{ user: CurrentUser; expiresAt: string }>('/auth/login', {
+  login: (email: string, password: string) => apiRequest<{ user?: CurrentUser; expiresAt?: string; mfaRequired: boolean }>('/auth/login', {
     method: 'POST', body: { email, password }, headers: requestHeaders(),
   }),
+  resetRequest: (email: string) => apiRequest<{ message: string }>('/auth/password-reset/request', { method: 'POST', body: { email }, headers: requestHeaders() }),
+  resetComplete: (token: string, password: string) => apiRequest<{ reset: true }>('/auth/password-reset/complete', { method: 'POST', body: { token, password }, headers: requestHeaders() }),
+  mfaChallenge: (code: string) => apiRequest<{ user: CurrentUser; expiresAt: string }>('/auth/mfa/challenge', { method: 'POST', body: { code }, headers: requestHeaders() }),
+  mfaStatus: () => apiRequest<{ enabled: boolean; recoveryCodesRemaining: number }>('/auth/mfa/status'),
+  mfaEnrollment: (password: string) => apiRequest<{ secret: string; otpauthUrl: string }>('/auth/mfa/enrollment', { method: 'POST', body: { password }, headers: requestHeaders() }),
+  mfaConfirmEnrollment: (code: string) => apiRequest<{ enabled: true; recoveryCodes: string[] }>('/auth/mfa/enrollment/confirm', { method: 'POST', body: { code }, headers: requestHeaders() }),
+  mfaDisable: (password: string, code: string) => apiRequest<{ disabled: true }>('/auth/mfa/disable', { method: 'POST', body: { password, code }, headers: requestHeaders() }),
+  mfaRegenerateRecoveryCodes: (password: string, code: string) => apiRequest<{ recoveryCodes: string[] }>('/auth/mfa/recovery-codes/regenerate', { method: 'POST', body: { password, code }, headers: requestHeaders() }),
   currentUser: () => apiRequest<{ user: CurrentUser }>('/auth/me'),
   logout: () => apiRequest<void>('/auth/logout', { method: 'POST', headers: requestHeaders() }),
   workspaces: () => apiRequest<WorkspaceMembership[]>('/workspaces'),

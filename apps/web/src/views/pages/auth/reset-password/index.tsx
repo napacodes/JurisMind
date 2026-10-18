@@ -29,7 +29,7 @@ const ResetPassword = () => {
           <div>
             <CardTitle className='mb-2 text-2xl font-semibold'>Reset Password</CardTitle>
             <CardDescription className='text-base'>
-              Please enter your current password and choose a new password to update your account security.
+              Use the secure link from your email to choose a new password for your account.
             </CardDescription>
           </div>
         </CardHeader>

@@ -9,6 +9,10 @@ import { CsrfOriginGuard } from "./csrf-origin.guard";
 import { LoginRateLimiterService } from "./login-rate-limiter.service";
 import { PasswordHasherService } from "./password-hasher.service";
 import { SessionAuthGuard } from "./session-auth.guard";
+import { MfaCryptoService } from "./mfa-crypto.service";
+import { MfaService } from "./mfa.service";
+import { PasswordRecoveryService } from "./password-recovery.service";
+import { ConfiguredPasswordResetDelivery, PASSWORD_RESET_DELIVERY } from "./password-reset-delivery";
 
 @Module({
   imports: [PrismaModule, AuthorizationModule],
@@ -20,6 +24,11 @@ import { SessionAuthGuard } from "./session-auth.guard";
     LoginRateLimiterService,
     CsrfOriginGuard,
     SessionAuthGuard,
+    MfaCryptoService,
+    MfaService,
+    PasswordRecoveryService,
+    ConfiguredPasswordResetDelivery,
+    { provide: PASSWORD_RESET_DELIVERY, useExisting: ConfiguredPasswordResetDelivery },
   ],
   exports: [SessionAuthGuard, CsrfOriginGuard, AuthService, AUTH_ENVIRONMENT],
 })

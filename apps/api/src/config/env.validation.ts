@@ -8,6 +8,13 @@ export interface ApiEnvironment {
   loginRateLimitMax: number;
   loginRateLimitWindowSeconds: number;
   invitationDevTokenDelivery: boolean;
+  mfaEncryptionKey: Buffer | null;
+  publicWebUrl: string;
+  passwordResetEmailEndpoint: string | null;
+  passwordResetEmailApiKey: string | null;
+  passwordResetEmailFrom: string | null;
+  localPasswordResetSinkEnabled: boolean;
+  localPasswordResetSinkKey: string | null;
 }
 
 /** Validate required runtime configuration without opening a database connection. */
@@ -103,6 +110,64 @@ export function validateEnvironment(
     throw new Error("INVITATION_DEV_TOKEN_DELIVERY is available only in development.");
   }
 
+  const rawMfaKey = environment.MFA_ENCRYPTION_KEY?.trim();
+  let mfaEncryptionKey: Buffer | null = null;
+  if (rawMfaKey) {
+    mfaEncryptionKey = Buffer.from(rawMfaKey, "base64");
+    if (mfaEncryptionKey.length !== 32 || mfaEncryptionKey.toString("base64") !== rawMfaKey) {
+      throw new Error("MFA_ENCRYPTION_KEY must be a base64-encoded 32-byte key.");
+    }
+  }
+  if (nodeEnv === "production" && !mfaEncryptionKey) {
+    throw new Error("MFA_ENCRYPTION_KEY is required in production.");
+  }
+
+  const emailConfig = [environment.PASSWORD_RESET_EMAIL_ENDPOINT, environment.PASSWORD_RESET_EMAIL_API_KEY, environment.PASSWORD_RESET_EMAIL_FROM];
+  const configuredEmailParts = emailConfig.filter((value) => Boolean(value?.trim())).length;
+  if (configuredEmailParts !== 0 && configuredEmailParts !== 3) {
+    throw new Error("Password reset email endpoint, API key, and sender must be configured together.");
+  }
+  let passwordResetEmailEndpoint: string | null = null;
+  let passwordResetEmailApiKey: string | null = null;
+  let passwordResetEmailFrom: string | null = null;
+  if (configuredEmailParts === 3) {
+    const endpointValue = environment.PASSWORD_RESET_EMAIL_ENDPOINT!.trim();
+    let endpoint: URL;
+    try { endpoint = new URL(endpointValue); } catch { throw new Error("PASSWORD_RESET_EMAIL_ENDPOINT must be a valid HTTPS URL."); }
+    if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.hash) {
+      throw new Error("PASSWORD_RESET_EMAIL_ENDPOINT must be HTTPS without credentials or fragment.");
+    }
+    const sender = environment.PASSWORD_RESET_EMAIL_FROM!.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sender)) throw new Error("PASSWORD_RESET_EMAIL_FROM must be a valid email address.");
+    passwordResetEmailEndpoint = endpoint.toString();
+    passwordResetEmailApiKey = environment.PASSWORD_RESET_EMAIL_API_KEY!.trim();
+    passwordResetEmailFrom = sender;
+  }
+  if (nodeEnv === "production" && configuredEmailParts !== 3) {
+    throw new Error("Password reset email delivery must be configured in production.");
+  }
+  const rawLocalResetSinkEnabled = environment.LOCAL_PASSWORD_RESET_SINK_ENABLED;
+  if (rawLocalResetSinkEnabled && !["true", "false"].includes(rawLocalResetSinkEnabled)) {
+    throw new Error("LOCAL_PASSWORD_RESET_SINK_ENABLED must be true or false when set.");
+  }
+  const localPasswordResetSinkEnabled = rawLocalResetSinkEnabled === "true";
+  const localPasswordResetSinkKey = environment.LOCAL_PASSWORD_RESET_SINK_KEY?.trim() || null;
+  if (localPasswordResetSinkEnabled && nodeEnv !== "development") {
+    throw new Error("The local password-reset sink is available only in development.");
+  }
+  if (localPasswordResetSinkEnabled && (!localPasswordResetSinkKey || Buffer.byteLength(localPasswordResetSinkKey) < 32)) {
+    throw new Error("LOCAL_PASSWORD_RESET_SINK_KEY must contain at least 32 bytes when the local sink is enabled.");
+  }
+  if (localPasswordResetSinkEnabled && configuredEmailParts !== 0) {
+    throw new Error("The local password-reset sink cannot be combined with an email delivery provider.");
+  }
+  if (!localPasswordResetSinkEnabled && localPasswordResetSinkKey) {
+    throw new Error("LOCAL_PASSWORD_RESET_SINK_KEY requires LOCAL_PASSWORD_RESET_SINK_ENABLED=true.");
+  }
+  const publicWebUrl = environment.PUBLIC_WEB_URL?.trim() || (nodeEnv === "production" ? "" : trustedOrigins[0]!);
+  if (!publicWebUrl) throw new Error("PUBLIC_WEB_URL is required in production.");
+  if (!trustedOrigins.includes(publicWebUrl)) throw new Error("PUBLIC_WEB_URL must exactly match an origin in TRUSTED_ORIGINS.");
+
   return {
     port,
     databaseUrl,
@@ -113,6 +178,13 @@ export function validateEnvironment(
     loginRateLimitMax,
     loginRateLimitWindowSeconds,
     invitationDevTokenDelivery,
+    mfaEncryptionKey,
+    publicWebUrl,
+    passwordResetEmailEndpoint,
+    passwordResetEmailApiKey,
+    passwordResetEmailFrom,
+    localPasswordResetSinkEnabled,
+    localPasswordResetSinkKey,
   };
 }
 

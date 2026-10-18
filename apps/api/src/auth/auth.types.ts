@@ -10,7 +10,7 @@ export type AuthEnvironment = Pick<
   | "loginRateLimitMax"
   | "loginRateLimitWindowSeconds"
   | "invitationDevTokenDelivery"
->;
+> & Partial<Pick<ApiEnvironment, "mfaEncryptionKey" | "publicWebUrl" | "passwordResetEmailEndpoint" | "passwordResetEmailApiKey" | "passwordResetEmailFrom" | "localPasswordResetSinkEnabled" | "localPasswordResetSinkKey">>;
 
 export interface SafeUserIdentity {
   id: string;
@@ -23,3 +23,5 @@ export interface LoginResult {
   rawSessionToken: string;
   expiresAt: Date;
 }
+
+export type LoginOutcome = LoginResult | { mfaRequired: true; rawChallengeToken: string; expiresAt: Date };

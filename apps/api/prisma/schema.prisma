@@ -64,6 +64,8 @@ model User {
   auditEvents          SecurityAuditEvent[] @relation("AuditActor")
   createdInvitations   WorkspaceInvitation[] @relation("InvitationCreator")
   receivedInvitations  WorkspaceInvitation[] @relation("InvitationRecipient")
+  passwordResetTokens  PasswordResetToken[]
+  mfa                   UserMfa?
 
   @@map("users")
 }
@@ -175,6 +177,61 @@ model UserSession {
 
   @@index([userId, revokedAt, expiresAt])
   @@map("user_sessions")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId, createdAt])
+  @@map("password_reset_tokens")
+}
+
+model UserMfa {
+  userId                  String    @id @map("user_id") @db.Uuid
+  secretCiphertext        String?   @map("secret_ciphertext") @db.Text
+  pendingSecretCiphertext String?   @map("pending_secret_ciphertext") @db.Text
+  pendingExpiresAt        DateTime? @map("pending_expires_at") @db.Timestamptz(6)
+  enabledAt               DateTime? @map("enabled_at") @db.Timestamptz(6)
+  lastTotpCounter         Int       @default(-1) @map("last_totp_counter")
+  updatedAt               DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user                    User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  recoveryCodes           MfaRecoveryCode[]
+  challenges              LoginMfaChallenge[]
+
+  @@map("user_mfa")
+}
+
+model MfaRecoveryCode {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  codeHash  String    @map("code_hash") @db.Char(64)
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  mfa       UserMfa   @relation(fields: [userId], references: [userId], onDelete: Restrict)
+
+  @@unique([userId, codeHash])
+  @@index([userId, usedAt])
+  @@map("mfa_recovery_codes")
+}
+
+model LoginMfaChallenge {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique @map("token_hash") @db.Char(64)
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  attempts   Int       @default(0)
+  consumedAt DateTime? @map("consumed_at") @db.Timestamptz(6)
+  mfa        UserMfa   @relation(fields: [userId], references: [userId], onDelete: Restrict)
+
+  @@index([userId, expiresAt])
+  @@map("login_mfa_challenges")
 }
 
 model SecurityAuditEvent {

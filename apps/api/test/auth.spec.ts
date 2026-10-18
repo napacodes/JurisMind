@@ -7,6 +7,10 @@ import { AuthModule } from "../src/auth/auth.module";
 import { sessionCookieName } from "../src/auth/auth.controller";
 import { CsrfOriginGuard } from "../src/auth/csrf-origin.guard";
 import { PasswordHasherService } from "../src/auth/password-hasher.service";
+import { PasswordRecoveryService } from "../src/auth/password-recovery.service";
+import { ConfiguredPasswordResetDelivery } from "../src/auth/password-reset-delivery";
+import { LoginRateLimiterService } from "../src/auth/login-rate-limiter.service";
+import { AuthService, hashSessionToken } from "../src/auth/auth.service";
 import { AUTH_ENVIRONMENT, AuthEnvironment } from "../src/auth/auth.types";
 import { PrismaService } from "../src/database/prisma.service";
 import { configureCors } from "../src/config/cors";
@@ -20,6 +24,11 @@ const environment: AuthEnvironment = {
   loginRateLimitMax: 2,
   loginRateLimitWindowSeconds: 900,
   invitationDevTokenDelivery: false,
+  mfaEncryptionKey: Buffer.alloc(32, 1),
+  publicWebUrl: origin,
+  passwordResetEmailEndpoint: null,
+  passwordResetEmailApiKey: null,
+  passwordResetEmailFrom: null,
 };
 const email = "lawyer@example.invalid";
 const password = "correct-horse-battery-staple";
@@ -55,6 +64,8 @@ class FakePrisma {
     status: "ACTIVE",
   }];
   readonly sessions = new Map<string, FakeSession>();
+  mfaEnabled = false;
+  readonly challenges: Array<Record<string, unknown>> = [];
   readonly auditEvents: Array<Record<string, unknown>> = [];
   readonly user = {
     findUnique: async ({ where }: { where: { emailNormalized: string } }) =>
@@ -65,6 +76,8 @@ class FakePrisma {
       return user ? { ...user, memberships: [], platformRoleGrants: [] } : null;
     },
   };
+  readonly userMfa = { findUnique: async () => this.mfaEnabled ? { enabledAt: new Date(), secretCiphertext: "ciphertext" } : null };
+  readonly loginMfaChallenge = { create: async ({ data }: { data: Record<string, unknown> }) => { this.challenges.push(data); return data; } };
   readonly userSession = {
     create: async ({ data }: { data: { id: string; userId: string; tokenHash: string; expiresAt: Date } }) => {
       const session: FakeSession = { ...data, revokedAt: null, lastSeenAt: null };
@@ -144,6 +157,46 @@ test("password hashing uses Argon2id and verifies only the correct password", as
   assert.equal(await passwordHasher.verify(password, encoded), true);
   assert.equal(await passwordHasher.verify("wrong-password", encoded), false);
   await assert.rejects(passwordHasher.hash("short", environment.passwordMinLength));
+});
+
+test("MFA-enrolled password login creates only a challenge, never a session", async () => {
+  database = new FakePrisma();
+  database.mfaEnabled = true;
+  const authService = new AuthService(database as never, passwordHasher, new LoginRateLimiterService(environment), environment);
+  const outcome = await authService.login({ email, password }, "127.0.0.1", "mfa-test");
+  assert.equal("mfaRequired" in outcome, true);
+  assert.equal(database.sessions.size, 0);
+  assert.equal(database.challenges.length, 1);
+  const challenge = outcome as { rawChallengeToken: string };
+  assert.equal(database.challenges[0]?.tokenHash, hashSessionToken(challenge.rawChallengeToken));
+  assert.equal(JSON.stringify(database.challenges).includes(challenge.rawChallengeToken), false);
+});
+
+test("password-reset requests return the same generic message when delivery is unconfigured", async () => {
+  const fake = new FakePrisma();
+  const recovery = new PasswordRecoveryService(fake as never, passwordHasher, new LoginRateLimiterService(environment), { send: async () => false }, environment);
+  const known = await recovery.request({ email }, "198.51.100.10", "reset-known");
+  const unknown = await recovery.request({ email: "unknown@example.invalid" }, "198.51.100.11", "reset-unknown");
+  assert.deepEqual(known, unknown);
+  assert.deepEqual(known, { message: "If an eligible account exists, password reset instructions will be sent." });
+  assert.equal(fake.challenges.length, 0);
+});
+
+test("development reset sink captures links in memory and drains them once", async () => {
+  const sink = new ConfiguredPasswordResetDelivery({
+    ...environment,
+    nodeEnv: "development",
+    localPasswordResetSinkEnabled: true,
+    localPasswordResetSinkKey: "test-only-key-with-at-least-32-bytes",
+  });
+  const expiresAt = new Date("2030-01-01T00:00:00.000Z");
+  assert.equal(await sink.send("browser-test@example.invalid", "http://localhost:3000/reset#token=synthetic", expiresAt), true);
+  const captured = sink.drainCaptured();
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0]?.to, "browser-test@example.invalid");
+  assert.equal(captured[0]?.resetUrl, "http://localhost:3000/reset#token=synthetic");
+  assert.equal(captured[0]?.expiresAt, expiresAt.toISOString());
+  assert.deepEqual(sink.drainCaptured(), []);
 });
 
 test("login issues a Secure HttpOnly host cookie and persists only the token hash", async () => {

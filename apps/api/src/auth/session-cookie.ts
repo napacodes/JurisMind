@@ -8,6 +8,10 @@ export function sessionCookieName(environment: AuthEnvironment): string {
     : "jurismind_session";
 }
 
+export function mfaChallengeCookieName(environment: AuthEnvironment): string {
+  return environment.nodeEnv === "production" ? "__Host-jurismind_mfa_challenge" : "jurismind_mfa_challenge";
+}
+
 export function readSessionCookie(request: Request, name: string): string | undefined {
   const cookieHeader = request.headers.cookie;
   if (!cookieHeader || cookieHeader.length > 8_192) return undefined;
