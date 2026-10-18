@@ -18,6 +18,9 @@ export default function LoginForm({ returnTo = '/workspaces', onAuthenticated }:
 }) {
   const router = useRouter()
   const [showPassword, setShowPassword] = useState(false)
+  const [mfaRequired, setMfaRequired] = useState(false)
+  const [mfaCode, setMfaCode] = useState('')
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<FormValues>({
     resolver: zodResolver(loginSchema), defaultValues: { email: '', password: '' },
@@ -26,12 +29,9 @@ export default function LoginForm({ returnTo = '/workspaces', onAuthenticated }:
   const submit = handleSubmit(async ({ email, password }) => {
     setError(null)
     try {
-      await api.login(email, password)
-      // Confirm the new server-managed cookie before changing authenticated UI state.
-      await api.currentUser()
-      await api.workspaces()
-      if (onAuthenticated) await onAuthenticated()
-      else router.replace(safeReturnTo(returnTo))
+      const login = await api.login(email, password)
+      if (login.mfaRequired) { setMfaRequired(true); return }
+      await finishAuthentication()
     } catch (reason) {
       setError(reason instanceof ApiError && reason.status === 401
         ? 'Email or password is incorrect.'
@@ -39,8 +39,27 @@ export default function LoginForm({ returnTo = '/workspaces', onAuthenticated }:
     }
   })
 
-  return (
-    <form onSubmit={submit} noValidate className='space-y-5' aria-busy={isSubmitting}>
+  async function finishAuthentication() {
+      // Confirm the new server-managed cookie before changing authenticated UI state.
+      await api.currentUser()
+      await api.workspaces()
+      if (onAuthenticated) await onAuthenticated()
+      else router.replace(safeReturnTo(returnTo))
+  }
+
+  const submitMfa = async () => {
+    setError(null)
+    try { await api.mfaChallenge(mfaCode); await finishAuthentication() }
+    catch { setError('The verification code is invalid or expired. Try again or use a recovery code.') }
+  }
+
+  return mfaRequired ? <form onSubmit={(event) => { event.preventDefault(); void submitMfa() }} noValidate className='space-y-5'>
+      <div className='space-y-2'><label htmlFor='mfa-code' className='text-sm font-medium'>{useRecoveryCode ? 'Recovery code' : 'Authenticator code'}</label>
+        <Input id='mfa-code' autoComplete='one-time-code' maxLength={useRecoveryCode ? 32 : 6} value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} required /></div>
+      {error && <p role='alert' className='text-sm text-destructive'>{error}</p>}
+      <button type='button' className='text-sm underline' onClick={() => { setUseRecoveryCode((v) => !v); setMfaCode('') }}>{useRecoveryCode ? 'Use authenticator code' : 'Use a recovery code'}</button>
+      <Button type='submit' className='w-full'>Verify and sign in</Button>
+    </form> : <form onSubmit={submit} noValidate className='space-y-5' aria-busy={isSubmitting}>
       <div className='space-y-2'>
         <label htmlFor='email' className='text-sm font-medium'>Email address</label>
         <Input id='email' type='email' autoComplete='username' inputMode='email' maxLength={320}
@@ -67,6 +86,6 @@ export default function LoginForm({ returnTo = '/workspaces', onAuthenticated }:
         {isSubmitting && <LoaderCircle className='mr-2 size-4 animate-spin' aria-hidden='true' />}
         {isSubmitting ? 'Signing in…' : 'Sign in'}
       </Button>
+      <a href='/pages/auth/forgot-password' className='block text-center text-sm underline'>Forgot your password?</a>
     </form>
-  )
 }

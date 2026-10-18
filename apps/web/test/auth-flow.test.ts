@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
 import { ApiError, allowedWorkspaceNavigation, api, apiBaseUrl, invitationTokenFromFragment, safeReturnTo } from '../src/lib/api'
 import { individualPracticeSchema, loginSchema } from '../src/lib/auth-schemas'
+import { resetTokenFromFragment } from '../src/views/pages/auth/reset-password/reset-password-form'
 
 const originalFetch = globalThis.fetch
 const originalApiUrl = process.env.NEXT_PUBLIC_API_BASE_URL
@@ -96,6 +97,13 @@ test('invitation secrets are read only from URL fragments and require a valid to
   assert.equal(invitationTokenFromFragment(`#token=${token}`), token)
   assert.equal(invitationTokenFromFragment(`?token=${token}`), null)
   assert.equal(invitationTokenFromFragment('#token=short'), null)
+})
+
+test('password-reset tokens are accepted only from a valid URL fragment', () => {
+  const token = 'A'.repeat(43)
+  assert.equal(resetTokenFromFragment(`#token=${token}`), token)
+  assert.equal(resetTokenFromFragment(`?token=${token}`), null)
+  assert.equal(resetTokenFromFragment('#token=short'), null)
 })
 
 test('navigation requires the backend workspace permission and excludes unsupported matter links', () => {

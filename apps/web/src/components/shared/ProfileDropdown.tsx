@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { LogOutIcon, UserIcon } from 'lucide-react'
+import { LogOutIcon, UserIcon, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/components/auth/AuthProvider'
 import { api, ApiError } from '@/lib/api'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
@@ -45,6 +45,7 @@ const ProfileDropdown = () => {
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => router.push('/workspaces')}><UserIcon /><span>Choose workspace</span></DropdownMenuItem>
+        <DropdownMenuItem onClick={() => router.push('/security/mfa')}><ShieldCheck /><span>Two-factor authentication</span></DropdownMenuItem>
         {error && <DropdownMenuLabel className='whitespace-normal text-xs text-destructive' role='alert'>{error}</DropdownMenuLabel>}
         <DropdownMenuSeparator />
         <DropdownMenuItem variant='destructive' onClick={() => void logout()}><LogOutIcon /><span>Sign out</span></DropdownMenuItem>

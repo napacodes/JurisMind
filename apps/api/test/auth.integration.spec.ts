@@ -10,10 +10,14 @@ import { AUTH_ENVIRONMENT } from "../src/auth/auth.types";
 import { sessionCookieName } from "../src/auth/session-cookie";
 import { configureCors } from "../src/config/cors";
 import { AuthService, hashSessionToken } from "../src/auth/auth.service";
+import type { LoginResult } from "../src/auth/auth.types";
 import { LoginRateLimiterService } from "../src/auth/login-rate-limiter.service";
 import { PasswordHasherService } from "../src/auth/password-hasher.service";
 import type { AuthEnvironment } from "../src/auth/auth.types";
 import { PrismaService } from "../src/database/prisma.service";
+import { PasswordRecoveryService } from "../src/auth/password-recovery.service";
+import { MfaCryptoService } from "../src/auth/mfa-crypto.service";
+import { MfaService } from "../src/auth/mfa.service";
 
 const testDatabaseUrl = process.env.AUTH_TEST_DATABASE_URL;
 if (testDatabaseUrl) {
@@ -35,6 +39,11 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     loginRateLimitMax: 5,
     loginRateLimitWindowSeconds: 900,
     invitationDevTokenDelivery: false,
+    mfaEncryptionKey: Buffer.alloc(32, 1),
+    publicWebUrl: "http://localhost:3000",
+    passwordResetEmailEndpoint: "https://mail.example.invalid/send",
+    passwordResetEmailApiKey: "integration-only",
+    passwordResetEmailFrom: "noreply@example.invalid",
   };
   const passwordHasher = new PasswordHasherService();
   const authService = new AuthService(
@@ -77,6 +86,11 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     const baseUrl = `http://127.0.0.1:${address.port}`;
     const trustedOrigin = httpEnvironment.trustedOrigins[0]!;
     const cookieName = sessionCookieName(httpEnvironment);
+    const productionSinkResponse = await fetch(`${baseUrl}/api/auth/dev/password-reset-sink/read`, {
+      method: "POST",
+      headers: { authorization: "Bearer integration-only-invalid-key", origin: trustedOrigin },
+    });
+    assert.equal(productionSinkResponse.status, 404, "local reset sink is unavailable in production configuration");
     const invalidHttpLogin = await fetch(`${baseUrl}/api/auth/login`, {
       method: "POST", headers: { origin: trustedOrigin, "content-type": "application/json" },
       body: JSON.stringify({ email, password: "wrong-password-value" }),
@@ -149,9 +163,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
 
     const loginRequestId = randomUUID();
     auditRequestIds.push(loginRequestId);
-    const login = await authService.login(
-      { email, password: "integration-test-password" }, "127.0.0.1", loginRequestId,
-    );
+    const login = await normalLogin(authService, email, loginRequestId);
     const tokenHash = hashSessionToken(login.rawSessionToken);
     const persisted = await prisma.userSession.findUnique({ where: { tokenHash } });
     assert.ok(persisted, "successful login persists the session");
@@ -221,9 +233,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
 
     // Pause the read-then-claim path after it has read an active session. A
     // concurrent logout must win before the conditional lastSeenAt update.
-    const racingLogin = await authService.login(
-      { email, password: "integration-test-password" }, "127.0.0.1", randomUUID(),
-    );
+    const racingLogin = await normalLogin(authService, email, randomUUID());
     let claimReached!: () => void;
     let allowClaim!: () => void;
     const claimReachedPromise = new Promise<void>((resolve) => { claimReached = resolve; });
@@ -244,9 +254,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     assert.equal(await authService.currentSession(racingLogin.rawSessionToken), null);
     assert.equal(await prisma.securityAuditEvent.count({ where: { requestId: racingLogoutRequestId, eventType: "AUTH_LOGOUT" } }), 1);
 
-    const expiringLogin = await authService.login(
-      { email, password: "integration-test-password" }, "127.0.0.1", randomUUID(),
-    );
+    const expiringLogin = await normalLogin(authService, email, randomUUID());
     await prisma.userSession.update({
       where: { tokenHash: hashSessionToken(expiringLogin.rawSessionToken) },
       data: {
@@ -256,18 +264,14 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     });
     assert.equal(await authService.currentUser(expiringLogin.rawSessionToken), null, "expired session is rejected");
 
-    const revokedLogin = await authService.login(
-      { email, password: "integration-test-password" }, "127.0.0.1", randomUUID(),
-    );
+    const revokedLogin = await normalLogin(authService, email, randomUUID());
     await prisma.userSession.update({
       where: { tokenHash: hashSessionToken(revokedLogin.rawSessionToken) },
       data: { revokedAt: new Date() },
     });
     assert.equal(await authService.currentUser(revokedLogin.rawSessionToken), null, "revoked session is rejected");
 
-    const disabledLogin = await authService.login(
-      { email, password: "integration-test-password" }, "127.0.0.1", randomUUID(),
-    );
+    const disabledLogin = await normalLogin(authService, email, randomUUID());
     await prisma.user.update({ where: { id: userId }, data: { status: "DISABLED" } });
     assert.equal(await authService.currentUser(disabledLogin.rawSessionToken), null, "disabled user session is rejected");
     await prisma.user.update({ where: { id: userId }, data: { status: "ACTIVE" } });
@@ -282,6 +286,60 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     assert.equal(actorEvents.filter((event) => event.eventType === "AUTH_LOGOUT").length, 3);
     assert.equal(actorEvents.some((event) => event.targetId === tokenHash), false,
       "audit references may not contain the bearer token hash");
+
+    const resetRequestId = randomUUID(); auditRequestIds.push(resetRequestId);
+    const resetLinks: string[] = [];
+    const passwordRecovery = new PasswordRecoveryService(
+      prisma as unknown as PrismaService,
+      passwordHasher,
+      new LoginRateLimiterService(environment),
+      { send: async (_to, url) => { resetLinks.push(url); return true; } },
+      environment,
+    );
+    const genericKnown = await passwordRecovery.request({ email }, "198.51.100.20", resetRequestId);
+    const genericUnknown = await passwordRecovery.request({ email: "not-found@example.invalid" }, "198.51.100.21", randomUUID());
+    assert.deepEqual(genericKnown, genericUnknown, "reset request response must not disclose account existence");
+    const expiredRawToken = new URL(resetLinks[resetLinks.length - 1]!).hash.slice("#token=".length);
+    const expiredTokenHash = hashSessionToken(expiredRawToken);
+    await prisma.passwordResetToken.update({ where: { tokenHash: expiredTokenHash }, data: { createdAt: new Date(Date.now() - 2_000), expiresAt: new Date(Date.now() - 1_000) } });
+    const expiredAttemptId = randomUUID(); auditRequestIds.push(expiredAttemptId);
+    await assert.rejects(passwordRecovery.complete({ token: expiredRawToken, password: "new-integration-password" }, "198.51.100.22", expiredAttemptId),
+      (error: { status?: number }) => error.status === 401, "expired reset tokens must be rejected");
+
+    const preResetLogin = await normalLogin(authService, email, randomUUID());
+    const activeResetRequestId = randomUUID(); auditRequestIds.push(activeResetRequestId);
+    await passwordRecovery.request({ email }, "198.51.100.23", activeResetRequestId);
+    const rawResetToken = new URL(resetLinks[resetLinks.length - 1]!).hash.slice("#token=".length);
+    const resetHash = hashSessionToken(rawResetToken);
+    const persistedReset = await prisma.passwordResetToken.findUnique({ where: { tokenHash: resetHash } });
+    assert.ok(persistedReset, "reset token hash must be persisted");
+    assert.equal(JSON.stringify(persistedReset).includes(rawResetToken), false);
+    await passwordRecovery.complete({ token: rawResetToken, password: "new-integration-password" }, "198.51.100.24", randomUUID());
+    assert.equal(await authService.currentUser(preResetLogin.rawSessionToken), null, "password reset revokes all prior sessions");
+    const replayAttemptId = randomUUID(); auditRequestIds.push(replayAttemptId);
+    await assert.rejects(passwordRecovery.complete({ token: rawResetToken, password: "another-new-password" }, "198.51.100.25", replayAttemptId),
+      (error: { status?: number }) => error.status === 401, "a consumed reset token cannot be replayed");
+
+    const mfaCrypto = new MfaCryptoService(environment);
+    const mfaService = new MfaService(prisma as unknown as PrismaService, mfaCrypto, passwordHasher, new LoginRateLimiterService(environment), environment);
+    const actor = { authorizationContext: { user: { id: userId, email, fullName: "Isolated Auth Integration User" }, platformRoles: [], memberships: [] } } as never;
+    const setup = await mfaService.beginEnrollment(actor, { password: "new-integration-password" }, randomUUID());
+    const currentCounter = Math.floor(Date.now() / 30_000);
+    const enabled = await mfaService.confirmEnrollment(actor, { code: mfaCrypto.codeAt(setup.secret, currentCounter) }, randomUUID());
+    assert.equal(enabled.recoveryCodes.length, 10);
+    const recoveryHash = mfaCrypto.recoveryCodeHash(enabled.recoveryCodes[0]!);
+    const storedRecovery = await prisma.mfaRecoveryCode.findUnique({ where: { userId_codeHash: { userId, codeHash: recoveryHash } } });
+    assert.ok(storedRecovery);
+    assert.equal(JSON.stringify(storedRecovery).includes(enabled.recoveryCodes[0]!), false);
+    const beforeMfaLogin = await prisma.userSession.count({ where: { userId } });
+    const mfaLogin = await authService.login({ email, password: "new-integration-password" }, "127.0.0.1", randomUUID());
+    assert.equal("mfaRequired" in mfaLogin, true);
+    assert.equal(await prisma.userSession.count({ where: { userId } }), beforeMfaLogin, "password alone must not create an authenticated session");
+    const challengeResult = await mfaService.challenge((mfaLogin as { rawChallengeToken: string }).rawChallengeToken, { code: enabled.recoveryCodes[0] }, randomUUID());
+    assert.equal(await authService.currentUser(challengeResult.rawSessionToken) !== null, true, "a valid recovery code completes MFA login");
+    const replayChallenge = await authService.login({ email, password: "new-integration-password" }, "127.0.0.1", randomUUID());
+    await assert.rejects(mfaService.challenge((replayChallenge as { rawChallengeToken: string }).rawChallengeToken, { code: enabled.recoveryCodes[0] }, randomUUID()),
+      (error: { status?: number }) => error.status === 401, "a recovery code is single-use");
   } finally {
     await app?.close().catch(() => undefined);
     if (userCreated) {
@@ -291,12 +349,22 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
           await transaction.securityAuditEvent.deleteMany({ where: { requestId: { in: auditRequestIds } } });
         }
         await transaction.userSession.deleteMany({ where: { userId } });
+        await transaction.mfaRecoveryCode.deleteMany({ where: { userId } });
+        await transaction.loginMfaChallenge.deleteMany({ where: { userId } });
+        await transaction.userMfa.deleteMany({ where: { userId } });
+        await transaction.passwordResetToken.deleteMany({ where: { userId } });
         await transaction.user.deleteMany({ where: { id: userId } });
       });
     }
     await prisma.$disconnect();
   }
 });
+
+async function normalLogin(service: AuthService, email: string, requestId: string): Promise<LoginResult> {
+  const result = await service.login({ email, password: "integration-test-password" }, "127.0.0.1", requestId);
+  assert.equal("mfaRequired" in result, false, "integration identity is not enrolled in MFA");
+  return result as LoginResult;
+}
 
 type TransactionFault = (transaction: Prisma.TransactionClient) => Promise<void>;
 

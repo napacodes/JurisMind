@@ -28,6 +28,37 @@ test("authentication environment requires explicit exact trusted origins and bou
   assert.throws(() => validateEnvironment({ ...valid, INVITATION_DEV_TOKEN_DELIVERY: "yes" }));
 });
 
+test("MFA encryption and password-reset gateway configuration are validated without exposing values", () => {
+  const key = Buffer.alloc(32, 3).toString("base64");
+  const validWithServices = {
+    ...valid,
+    MFA_ENCRYPTION_KEY: key,
+    PUBLIC_WEB_URL: "http://localhost:3000",
+    PASSWORD_RESET_EMAIL_ENDPOINT: "https://mail.example.invalid/send",
+    PASSWORD_RESET_EMAIL_API_KEY: "local-test-only",
+    PASSWORD_RESET_EMAIL_FROM: "security@example.invalid",
+  };
+  assert.equal(validateEnvironment(validWithServices).mfaEncryptionKey?.length, 32);
+  assert.equal(validateEnvironment(validWithServices).passwordResetEmailEndpoint, "https://mail.example.invalid/send");
+  assert.throws(() => validateEnvironment({ ...valid, MFA_ENCRYPTION_KEY: "short" }));
+  assert.throws(() => validateEnvironment({ ...valid, PASSWORD_RESET_EMAIL_API_KEY: "partial" }));
+  assert.throws(() => validateEnvironment({ ...validWithServices, PASSWORD_RESET_EMAIL_ENDPOINT: "http://mail.example.invalid/send" }));
+  assert.throws(() => validateEnvironment({ ...validWithServices, NODE_ENV: "production", TRUSTED_ORIGINS: "https://app.example.invalid", PUBLIC_WEB_URL: undefined, MFA_ENCRYPTION_KEY: undefined }));
+});
+
+test("local reset sink is development-only, explicitly enabled, and requires a separate access key", () => {
+  const sinkEnvironment = {
+    ...valid,
+    LOCAL_PASSWORD_RESET_SINK_ENABLED: "true",
+    LOCAL_PASSWORD_RESET_SINK_KEY: "test-only-key-with-at-least-32-bytes",
+  };
+  assert.equal(validateEnvironment(sinkEnvironment).localPasswordResetSinkEnabled, true);
+  assert.throws(() => validateEnvironment({ ...sinkEnvironment, NODE_ENV: "production", TRUSTED_ORIGINS: "https://app.example.invalid", PUBLIC_WEB_URL: "https://app.example.invalid", MFA_ENCRYPTION_KEY: Buffer.alloc(32, 5).toString("base64"), PASSWORD_RESET_EMAIL_ENDPOINT: "https://mail.example.invalid/send", PASSWORD_RESET_EMAIL_API_KEY: "configured", PASSWORD_RESET_EMAIL_FROM: "security@example.invalid" }));
+  assert.throws(() => validateEnvironment({ ...valid, LOCAL_PASSWORD_RESET_SINK_ENABLED: "true" }));
+  assert.throws(() => validateEnvironment({ ...valid, LOCAL_PASSWORD_RESET_SINK_ENABLED: "false", LOCAL_PASSWORD_RESET_SINK_KEY: "test-only-key-with-at-least-32-bytes" }));
+  assert.throws(() => validateEnvironment({ ...valid, LOCAL_PASSWORD_RESET_SINK_ENABLED: "enabled" }));
+});
+
 test("invitation roles accept only scoped practice roles", () => {
   const userId = "7e662b74-0400-4c57-b01d-9fa7f8ae4140";
   assert.equal(parseAddMembership({ userId, role: "ASSISTANT" }).role, "ASSISTANT");
