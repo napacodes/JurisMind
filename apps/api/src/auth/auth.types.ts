@@ -10,7 +10,7 @@ export type AuthEnvironment = Pick<
   | "loginRateLimitMax"
   | "loginRateLimitWindowSeconds"
   | "invitationDevTokenDelivery"
-> & Partial<Pick<ApiEnvironment, "mfaEncryptionKey" | "publicWebUrl" | "passwordResetEmailEndpoint" | "passwordResetEmailApiKey" | "passwordResetEmailFrom" | "localPasswordResetSinkEnabled" | "localPasswordResetSinkKey">>;
+> & Partial<Pick<ApiEnvironment, "mfaEncryptionKey" | "lawyerCredentialEncryptionKey" | "publicWebUrl" | "passwordResetEmailEndpoint" | "passwordResetEmailApiKey" | "passwordResetEmailFrom" | "localPasswordResetSinkEnabled" | "localPasswordResetSinkKey">>;
 
 export interface SafeUserIdentity {
   id: string;

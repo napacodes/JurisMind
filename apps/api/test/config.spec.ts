@@ -46,6 +46,13 @@ test("MFA encryption and password-reset gateway configuration are validated with
   assert.throws(() => validateEnvironment({ ...validWithServices, NODE_ENV: "production", TRUSTED_ORIGINS: "https://app.example.invalid", PUBLIC_WEB_URL: undefined, MFA_ENCRYPTION_KEY: undefined }));
 });
 
+test("lawyer credential identifier encryption requires a valid 32-byte key and is mandatory in production", () => {
+  const key = Buffer.alloc(32, 9).toString("base64");
+  assert.equal(validateEnvironment({ ...valid, LAWYER_CREDENTIAL_ENCRYPTION_KEY: key }).lawyerCredentialEncryptionKey?.length, 32);
+  assert.throws(() => validateEnvironment({ ...valid, LAWYER_CREDENTIAL_ENCRYPTION_KEY: "invalid" }));
+  assert.throws(() => validateEnvironment({ ...valid, NODE_ENV: "production", TRUSTED_ORIGINS: "https://app.example.invalid", PUBLIC_WEB_URL: "https://app.example.invalid", MFA_ENCRYPTION_KEY: Buffer.alloc(32, 2).toString("base64"), PASSWORD_RESET_EMAIL_ENDPOINT: "https://mail.example.invalid/send", PASSWORD_RESET_EMAIL_API_KEY: "configured", PASSWORD_RESET_EMAIL_FROM: "security@example.invalid" }));
+});
+
 test("local reset sink is development-only, explicitly enabled, and requires a separate access key", () => {
   const sinkEnvironment = {
     ...valid,

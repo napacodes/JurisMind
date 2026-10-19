@@ -46,12 +46,12 @@ Use `npm run <command> --workspace=@jurismind/web` or `--workspace=@jurismind/ap
 
 ## Architecture and security
 
-See [docs/architecture.md](docs/architecture.md) for module boundaries, authentication configuration, and the authorization model. Authentication establishes an identity only; tenant isolation, firm workflows, and matter-level authorization are not implemented. Do not put real secrets in tracked files or treat frontend checks as authorization.
+See [docs/architecture.md](docs/architecture.md) for module boundaries, authentication configuration, and the authorization model. Server-side session and workspace permission checks, selected Super Admin workflows, and lawyer credential review are implemented. Tenant isolation is enforced for those scoped workflows, but comprehensive tenant isolation, live matter-level authorization, and ethical walls are not implemented. Do not put real secrets in tracked files or treat frontend checks as authorization.
 
 ## Dashboard preview
 
-The web app includes a sample-data legal operations workspace adapted from the MIT-licensed AdminCN template. See [third-party notices](docs/third-party-notices.md) for attribution and licensing details. The dashboard and module pages are UI previews only; authentication, persistence, authorization, and audit logging are not connected.
+The web app includes a sample-data legal operations workspace adapted from the MIT-licensed AdminCN template. See [third-party notices](docs/third-party-notices.md) for attribution and licensing details. Dashboard and legal operations records remain sample-data previews and are not backed by live matter or firm records. Authentication and workspace gates protect the workspace routes; separate APIs provide persistence and audit events for platform user administration, lawyer credential review, and CMS content management.
 
 ## Current status
 
-Milestones 1–3 establish the monorepo, AdminCN-based legal dashboard preview, and public marketing site. Milestone 4 Phase 1 defines the PostgreSQL identity/workspace/session/audit schema, and Phase 2 adds backend authentication and server-managed sessions. Next steps include authorization, tenant-aware persistence, CMS, and end-to-end access-denial verification. No product capability should be considered implemented until it exists and is verified in this repository.
+Milestones 1–3 establish the monorepo, AdminCN-based legal dashboard preview, and public marketing site. Milestone 4 adds identity and workspace foundations, server-managed authentication with password recovery and MFA, server-side practice and platform authorization, invitations and individual-practice provisioning, Super Admin user administration, lawyer credential review, and CMS publishing. Matter-level authorization, legal operational data workflows, complete browser acceptance, and production deployment readiness remain outstanding. No product capability should be considered accepted until it has been verified in the relevant environment.

@@ -9,8 +9,8 @@ import { Button } from '@/components/ui/button'
 import { useAuth } from './AuthProvider'
 import { allowedWorkspaceNavigation, safeReturnTo } from '@/lib/api'
 
-export function AuthGate({ children, requireWorkspace = false }: { children: ReactNode; requireWorkspace?: boolean }) {
-  const { state, workspaces, refresh } = useAuth()
+export function AuthGate({ children, requireWorkspace = false, requirePlatformAdmin = false }: { children: ReactNode; requireWorkspace?: boolean; requirePlatformAdmin?: boolean }) {
+  const { state, user, workspaces, refresh } = useAuth()
   const hydrated = useSyncExternalStore(
     () => () => undefined,
     () => true,
@@ -35,6 +35,9 @@ export function AuthGate({ children, requireWorkspace = false }: { children: Rea
   if (!hydrated || state === 'loading') return <LoadingState label='Verifying your JurisMind session…' />
   if (state === 'error') return <StatusPage title='JurisMind is unavailable' detail='We could not verify your session. No protected workspace content was loaded.' action={<Button onClick={() => void refresh().catch(() => undefined)}>Try again</Button>} />
   if (state === 'unauthenticated') return <LoadingState label='Taking you to sign in…' />
+  if (requirePlatformAdmin && !user?.platformRoles?.includes('SUPER_ADMIN')) {
+    return <StatusPage title='Platform administration is restricted' detail='This area is available only to users with an active Super Admin grant. Practice roles do not provide platform-wide access.' action={<Button nativeButton={false} render={<Link href='/workspaces' />}>Return to workspaces</Button>} />
+  }
   if (requireWorkspace && workspaces.length === 0) return <LoadingState label='Opening workspace setup…' />
 
   if (requireWorkspace) {

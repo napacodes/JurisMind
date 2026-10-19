@@ -186,9 +186,9 @@ export class AuthController {
   async me(
     @Req() request: AuthorizationRequest,
     @Res({ passthrough: true }) response: Response,
-  ): Promise<{ user: { id: string; email: string; fullName: string } }> {
+  ): Promise<{ user: { id: string; email: string; fullName: string }; platformRoles: readonly string[] }> {
     response.setHeader("Cache-Control", "no-store");
-    return { user: request.authorizationContext!.user };
+    return { user: request.authorizationContext!.user, platformRoles: request.authorizationContext!.platformRoles };
   }
 
 }

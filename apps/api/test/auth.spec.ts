@@ -238,7 +238,9 @@ test("login issues a Secure HttpOnly host cookie and persists only the token has
   });
   const currentBody = await current.text();
   assert.equal(current.status, 200, currentBody);
-  assert.deepEqual(JSON.parse(currentBody), { user: { id: "user-test-1", email, fullName: "Sample Lawyer" } });
+  assert.deepEqual(JSON.parse(currentBody), {
+    user: { id: "user-test-1", email, fullName: "Sample Lawyer" }, platformRoles: [],
+  });
 });
 
 test("invalid and unknown credentials return the same generic response and are audited", async () => {
