@@ -1,7 +1,7 @@
 export type PracticeRole = 'FIRM_ADMIN' | 'LAWYER' | 'ASSISTANT'
 export type WorkspaceKind = 'FIRM' | 'INDIVIDUAL'
 
-export type CurrentUser = { id: string; email: string; fullName: string }
+export type CurrentUser = { id: string; email: string; fullName: string; platformRoles?: string[] }
 export type WorkspaceMembership = {
   id: string
   name: string
@@ -86,6 +86,29 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   }
 }
 
+async function apiForm<T>(path: string, body: FormData): Promise<T> {
+  let response: Response
+  try {
+    response = await fetch(`${apiBaseUrl()}${path}`, { method: 'POST', credentials: 'include', cache: 'no-store',
+      headers: requestHeaders(), body })
+  } catch {
+    throw new Error('The JurisMind service could not be reached. Check your connection and try again.')
+  }
+  if (!response.ok) throw new ApiError(response.status, 'The request could not be completed.')
+  return await response.json() as T
+}
+
+async function apiDocument(path: string): Promise<Blob> {
+  let response: Response
+  try {
+    response = await fetch(`${apiBaseUrl()}${path}`, { credentials: 'include', cache: 'no-store' })
+  } catch {
+    throw new Error('The JurisMind service could not be reached. Check your connection and try again.')
+  }
+  if (!response.ok) throw new ApiError(response.status, 'The document could not be retrieved.')
+  return response.blob()
+}
+
 function requestHeaders(): HeadersInit {
   return { 'X-Request-Id': crypto.randomUUID() }
 }
@@ -102,7 +125,17 @@ export const api = {
   mfaConfirmEnrollment: (code: string) => apiRequest<{ enabled: true; recoveryCodes: string[] }>('/auth/mfa/enrollment/confirm', { method: 'POST', body: { code }, headers: requestHeaders() }),
   mfaDisable: (password: string, code: string) => apiRequest<{ disabled: true }>('/auth/mfa/disable', { method: 'POST', body: { password, code }, headers: requestHeaders() }),
   mfaRegenerateRecoveryCodes: (password: string, code: string) => apiRequest<{ recoveryCodes: string[] }>('/auth/mfa/recovery-codes/regenerate', { method: 'POST', body: { password, code }, headers: requestHeaders() }),
-  currentUser: () => apiRequest<{ user: CurrentUser }>('/auth/me'),
+  currentUser: () => apiRequest<{ user: CurrentUser; platformRoles: string[] }>('/auth/me'),
+  platformUsers: (query: { page: number; pageSize: number; search?: string; role?: string; status?: string; workspaceKind?: string }) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
+    return apiRequest<PlatformUserPage>(`/platform-admin/users?${params.toString()}`)
+  },
+  platformUser: (userId: string) => apiRequest<PlatformUserDetail>(`/platform-admin/users/${encodeURIComponent(userId)}`),
+  changePlatformUserStatus: (userId: string, status: 'ACTIVE' | 'DISABLED') => apiRequest<{ id: string; status: 'ACTIVE' | 'DISABLED'; changed: boolean }>(
+    `/platform-admin/users/${encodeURIComponent(userId)}/status`,
+    { method: 'PATCH', body: { status }, headers: requestHeaders() },
+  ),
   logout: () => apiRequest<void>('/auth/logout', { method: 'POST', headers: requestHeaders() }),
   workspaces: () => apiRequest<WorkspaceMembership[]>('/workspaces'),
   provisionIndividual: (name: string, idempotencyKey: string) => apiRequest<{
@@ -112,10 +145,104 @@ export const api = {
   }>('/workspaces/individual-practice', { method: 'POST', body: { name }, headers: {
     ...requestHeaders(), 'Idempotency-Key': idempotencyKey,
   } }),
+  lawyerVerification: (workspaceId: string) => apiRequest<LawyerVerificationMine>(`/workspaces/${encodeURIComponent(workspaceId)}/lawyer-verification`),
+  submitLawyerVerification: (workspaceId: string, input: { cardHolderName: string; jurisdiction: string; cardIdentifier: string }, document: File) => {
+    const body = new FormData()
+    body.set('cardHolderName', input.cardHolderName)
+    body.set('jurisdiction', input.jurisdiction)
+    body.set('cardIdentifier', input.cardIdentifier)
+    body.set('document', document)
+    return apiForm<LawyerVerificationSubmission>(`/workspaces/${encodeURIComponent(workspaceId)}/lawyer-verification`, body)
+  },
+  lawyerVerificationDocument: (workspaceId: string, submissionId: string, documentId: string) =>
+    apiDocument(`/workspaces/${encodeURIComponent(workspaceId)}/lawyer-verification/${encodeURIComponent(submissionId)}/documents/${encodeURIComponent(documentId)}`),
+  pendingLawyerVerifications: (page = 1, pageSize = 25) => apiRequest<LawyerVerificationQueue>(`/platform-admin/lawyer-verifications?page=${page}&pageSize=${pageSize}`),
+  platformLawyerVerification: (submissionId: string) => apiRequest<PlatformLawyerVerificationDetail>(`/platform-admin/lawyer-verifications/${encodeURIComponent(submissionId)}`),
+  platformLawyerVerificationDocument: (submissionId: string, documentId: string) =>
+    apiDocument(`/platform-admin/lawyer-verifications/${encodeURIComponent(submissionId)}/documents/${encodeURIComponent(documentId)}`),
+  reviewLawyerVerification: (submissionId: string, decision: 'APPROVED' | 'REJECTED', reason?: string) =>
+    apiRequest<{ id: string; status: 'APPROVED' | 'REJECTED'; reviewedAt: string }>(`/platform-admin/lawyer-verifications/${encodeURIComponent(submissionId)}/review`, {
+      method: 'POST', body: { decision, ...(reason ? { reason } : {}) }, headers: requestHeaders(),
+    }),
+  platformContent: (page = 1) => apiRequest<ContentPage>(`/platform-admin/content?page=${page}&pageSize=50`),
+  createContent: (input: ContentInput) => apiRequest<ContentEntry>('/platform-admin/content', { method: 'POST', body: input, headers: requestHeaders() }),
+  updateContent: (id: string, input: ContentInput, expectedUpdatedAt: string) => apiRequest<ContentEntry>(`/platform-admin/content/${encodeURIComponent(id)}`, { method: 'PATCH', body: { ...input, expectedUpdatedAt }, headers: requestHeaders() }),
+  previewContent: (id: string) => apiRequest<ContentEntry>(`/platform-admin/content/${encodeURIComponent(id)}/preview`),
+  contentAction: (id: string, action: 'publish' | 'unpublish' | 'archive') => apiRequest<ContentEntry>(`/platform-admin/content/${encodeURIComponent(id)}/${action}`, { method: 'POST', headers: requestHeaders() }),
+  publicContent: (slug: string) => apiRequest<ContentEntry>(`/public/content/${encodeURIComponent(slug)}`),
   acceptInvitation: (token: string) => apiRequest<{ accepted: boolean; workspaceId: string; membershipId: string }>('/invitations/accept', {
     method: 'POST', body: { token }, headers: requestHeaders(),
   }),
 }
+
+export type LawyerVerificationSubmission = {
+  id: string
+  status: 'PENDING' | 'APPROVED' | 'REJECTED'
+  cardIdentifierLast4: string
+  createdAt: string
+  cardHolderName?: string
+  jurisdiction?: string
+  reviewReason?: string | null
+  reviewedAt?: string | null
+  documents?: Array<{ id: string; mediaType: string; sizeBytes: number; createdAt?: string }>
+}
+
+export type LawyerVerificationMine = { currentStatus: 'NOT_SUBMITTED' | 'PENDING' | 'APPROVED' | 'REJECTED'; submissions: LawyerVerificationSubmission[] }
+export type LawyerVerificationQueue = {
+  submissions: Array<LawyerVerificationSubmission & {
+    workspaceId: string
+    jurisdiction: string
+    membership: { user: { id: string; fullName: string; email: string }; workspace: { id: string; name: string; kind: WorkspaceKind } }
+    documents: Array<{ id: string; mediaType: string; sizeBytes: number }>
+  }>
+  pagination: { page: number; pageSize: number; total: number; totalPages: number }
+}
+export type PlatformLawyerVerificationDetail = LawyerVerificationSubmission & {
+  workspaceId: string
+  membershipId: string
+  jurisdiction: string
+  cardIdentifier: string
+  reviewReason: string | null
+  reviewedAt: string | null
+  membership: { user: { id: string; fullName: string; email: string }; workspace: { id: string; name: string; kind: WorkspaceKind } }
+  documents: Array<{ id: string; mediaType: string; sizeBytes: number; createdAt: string }>
+}
+
+export type PlatformUserSummary = {
+  id: string
+  email: string
+  fullName: string
+  status: 'ACTIVE' | 'DISABLED'
+  emailVerifiedAt: string | null
+  createdAt: string
+  platformRoles: string[]
+  practiceMemberships: Array<{ role: string; workspace: { id: string; name: string; kind: WorkspaceKind } }>
+}
+
+export type PlatformUserPage = {
+  users: PlatformUserSummary[]
+  pagination: { page: number; pageSize: number; total: number; totalPages: number }
+}
+
+export type PlatformUserDetail = Omit<PlatformUserSummary, 'practiceMemberships'> & {
+  updatedAt: string
+  platformRoles: string[]
+  memberships: Array<{
+    id: string
+    role: string
+    status: string
+    joinedAt: string | null
+    workspace: { id: string; name: string; kind: WorkspaceKind; status: string }
+  }>
+}
+
+export type ContentEntry = {
+  id: string; type: 'BLOG_POST' | 'INFORMATIONAL_PAGE'; status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'
+  slug: string; title: string; summary: string; body: string; seoTitle: string | null; seoDescription: string | null
+  publishedAt: string | null; createdAt: string; updatedAt: string
+}
+export type ContentInput = Pick<ContentEntry, 'type' | 'slug' | 'title' | 'summary' | 'body' | 'seoTitle' | 'seoDescription'>
+export type ContentPage = { entries: Array<Omit<ContentEntry, 'body' | 'seoTitle' | 'seoDescription'>>; pagination: { page: number; pageSize: number; total: number; totalPages: number } }
 
 export function safeReturnTo(value: string | null | undefined, fallback = '/workspaces'): string {
   if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\') || /[\u0000-\u001f]/.test(value)) {
@@ -134,5 +261,8 @@ export function safeReturnTo(value: string | null | undefined, fallback = '/work
 export function allowedWorkspaceNavigation(permissions: readonly string[]) {
   // The existing dashboard is a clearly labelled sample-data preview. No live matter,
   // client, billing, document, or reporting API permissions currently exist.
-  return permissions.includes('workspace:read:metadata') ? ['/dashboard'] : []
+  const routes: string[] = []
+  if (permissions.includes('workspace:read:metadata')) routes.push('/dashboard')
+  if (permissions.includes('lawyer-credential:submit:self')) routes.push('/lawyer-verification')
+  return routes
 }

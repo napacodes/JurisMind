@@ -9,6 +9,7 @@ export interface ApiEnvironment {
   loginRateLimitWindowSeconds: number;
   invitationDevTokenDelivery: boolean;
   mfaEncryptionKey: Buffer | null;
+  lawyerCredentialEncryptionKey: Buffer | null;
   publicWebUrl: string;
   passwordResetEmailEndpoint: string | null;
   passwordResetEmailApiKey: string | null;
@@ -122,6 +123,18 @@ export function validateEnvironment(
     throw new Error("MFA_ENCRYPTION_KEY is required in production.");
   }
 
+  const rawCredentialKey = environment.LAWYER_CREDENTIAL_ENCRYPTION_KEY?.trim();
+  let lawyerCredentialEncryptionKey: Buffer | null = null;
+  if (rawCredentialKey) {
+    lawyerCredentialEncryptionKey = Buffer.from(rawCredentialKey, "base64");
+    if (lawyerCredentialEncryptionKey.length !== 32 || lawyerCredentialEncryptionKey.toString("base64") !== rawCredentialKey) {
+      throw new Error("LAWYER_CREDENTIAL_ENCRYPTION_KEY must be a base64-encoded 32-byte key.");
+    }
+  }
+  if (nodeEnv === "production" && !lawyerCredentialEncryptionKey) {
+    throw new Error("LAWYER_CREDENTIAL_ENCRYPTION_KEY is required in production.");
+  }
+
   const emailConfig = [environment.PASSWORD_RESET_EMAIL_ENDPOINT, environment.PASSWORD_RESET_EMAIL_API_KEY, environment.PASSWORD_RESET_EMAIL_FROM];
   const configuredEmailParts = emailConfig.filter((value) => Boolean(value?.trim())).length;
   if (configuredEmailParts !== 0 && configuredEmailParts !== 3) {
@@ -179,6 +192,7 @@ export function validateEnvironment(
     loginRateLimitWindowSeconds,
     invitationDevTokenDelivery,
     mfaEncryptionKey,
+    lawyerCredentialEncryptionKey,
     publicWebUrl,
     passwordResetEmailEndpoint,
     passwordResetEmailApiKey,

@@ -10,6 +10,7 @@ export const Permission = {
   AccessLawyerPrivateResources: "matter:access:lawyer-private",
   AccessAssistantAuthorizedResources: "matter:access:assistant-authorized",
   PlatformAdministration: "platform:admin",
+  SubmitLawyerCredentialVerification: "lawyer-credential:submit:self",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
@@ -22,7 +23,7 @@ const FIRM_ADMIN_PERMISSIONS: readonly Permission[] = [
   Permission.ManageAssistantAssignments,
 ];
 
-const LAWYER_PERMISSIONS: readonly Permission[] = [Permission.ReadWorkspaceMetadata, Permission.ManageAssistantAssignments];
+const LAWYER_PERMISSIONS: readonly Permission[] = [Permission.ReadWorkspaceMetadata, Permission.ManageAssistantAssignments, Permission.SubmitLawyerCredentialVerification];
 const ASSISTANT_PERMISSIONS: readonly Permission[] = [Permission.ReadWorkspaceMetadata];
 
 const PRACTICE_ROLE_PERMISSIONS: Record<MembershipRole, readonly Permission[]> = {

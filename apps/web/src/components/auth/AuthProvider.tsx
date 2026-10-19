@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const current = await api.currentUser()
       const memberships = await api.workspaces()
-      setUser(current.user)
+      setUser({ ...current.user, platformRoles: current.platformRoles })
       setWorkspaces(memberships)
       setState('authenticated')
     } catch (error) {
@@ -50,7 +50,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const current = await api.currentUser()
         const memberships = await api.workspaces()
         if (!active) return
-        setUser(current.user)
+        setUser({ ...current.user, platformRoles: current.platformRoles })
         setWorkspaces(memberships)
         setState('authenticated')
       } catch (error) {

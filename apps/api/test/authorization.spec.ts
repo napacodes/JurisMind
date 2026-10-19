@@ -41,10 +41,13 @@ test("practice permission catalogue is explicit for every role and workspace kin
     Permission.ManageAssistantAssignments,
   ]);
   assert.deepEqual(permissionsForPracticeRole(MembershipRole.FIRM_ADMIN, WorkspaceKind.INDIVIDUAL), []);
-  assert.deepEqual(permissionsForPracticeRole(MembershipRole.LAWYER, WorkspaceKind.FIRM), [Permission.ReadWorkspaceMetadata, Permission.ManageAssistantAssignments]);
-  assert.deepEqual(permissionsForPracticeRole(MembershipRole.LAWYER, WorkspaceKind.INDIVIDUAL), [Permission.ReadWorkspaceMetadata, Permission.ManageAssistantAssignments]);
+  assert.deepEqual(permissionsForPracticeRole(MembershipRole.LAWYER, WorkspaceKind.FIRM), [Permission.ReadWorkspaceMetadata, Permission.ManageAssistantAssignments, Permission.SubmitLawyerCredentialVerification]);
+  assert.deepEqual(permissionsForPracticeRole(MembershipRole.LAWYER, WorkspaceKind.INDIVIDUAL), [Permission.ReadWorkspaceMetadata, Permission.ManageAssistantAssignments, Permission.SubmitLawyerCredentialVerification]);
   assert.deepEqual(permissionsForPracticeRole(MembershipRole.ASSISTANT, WorkspaceKind.FIRM), [Permission.ReadWorkspaceMetadata]);
   assert.deepEqual(permissionsForPracticeRole(MembershipRole.ASSISTANT, WorkspaceKind.INDIVIDUAL), [Permission.ReadWorkspaceMetadata]);
+  assert.equal(service.hasPermission(context(MembershipRole.FIRM_ADMIN), Permission.SubmitLawyerCredentialVerification, workspaceA), false);
+  assert.equal(service.hasPermission(context(MembershipRole.ASSISTANT), Permission.SubmitLawyerCredentialVerification, workspaceA), false);
+  assert.equal(service.hasPermission(context(undefined, WorkspaceKind.FIRM, [PlatformRole.SUPER_ADMIN]), Permission.SubmitLawyerCredentialVerification, workspaceA), false);
   assert.equal(service.hasPermission(context(MembershipRole.FIRM_ADMIN), Permission.AccessLawyerPrivateResources, workspaceA), false);
   assert.equal(service.hasPermission(context(MembershipRole.FIRM_ADMIN), Permission.AccessAssistantAuthorizedResources, workspaceA), false);
 });
