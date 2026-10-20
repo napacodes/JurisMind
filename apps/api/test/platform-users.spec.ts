@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BadRequestException } from "@nestjs/common";
-import { parsePlatformUserId, parsePlatformUserListQuery, parsePlatformUserStatus } from "../src/platform-admin/platform-users.dto";
+import { parseCreatePlatformAdminInput, parsePlatformUserId, parsePlatformUserListQuery, parsePlatformUserStatus } from "../src/platform-admin/platform-users.dto";
 
 test("platform user query accepts bounded filters and defaults safely", () => {
   assert.deepEqual(parsePlatformUserListQuery({}), { page: 1, pageSize: 25 });
@@ -36,4 +36,20 @@ test("platform user mutation body and identifier are strictly validated", () => 
   assert.throws(() => parsePlatformUserStatus({ status: "SUSPENDED" }), BadRequestException);
   assert.equal(parsePlatformUserId("550e8400-e29b-41d4-a716-446655440000"), "550e8400-e29b-41d4-a716-446655440000");
   assert.throws(() => parsePlatformUserId("not-an-id"), BadRequestException);
+});
+
+test("platform admin creation input is normalized and rejects unsafe values", () => {
+  assert.deepEqual(parseCreatePlatformAdminInput({
+    fullName: "  Jane Admin  ",
+    email: "  JANE@EXAMPLE.COM ",
+    password: "valid-safepassword-123",
+  }), {
+    fullName: "Jane Admin",
+    email: "jane@example.com",
+    password: "valid-safepassword-123",
+  });
+  assert.throws(() => parseCreatePlatformAdminInput({ fullName: "" }), BadRequestException);
+  assert.throws(() => parseCreatePlatformAdminInput({ fullName: "Jane", email: "not-an-email" }), BadRequestException);
+  assert.throws(() => parseCreatePlatformAdminInput({ fullName: "Jane", email: "jane@example.com", password: "short" }), BadRequestException);
+  assert.throws(() => parseCreatePlatformAdminInput({ fullName: "Jane", email: "jane@example.com", password: "password", role: "LAWYER" }), BadRequestException);
 });

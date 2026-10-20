@@ -33,6 +33,15 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   {
+    groupLabel: 'Platform administration',
+    items: [
+      { icon: 'LayoutDashboard', label: 'Dashboard', href: '/administration/users' },
+      { icon: 'UsersRound', label: 'Admin users', href: '/administration/users' },
+      { icon: 'FileText', label: 'Website content', href: '/administration/content' },
+      { icon: 'ShieldCheck', label: 'Credential reviews', href: '/administration/lawyer-verifications' }
+    ]
+  },
+  {
     groupLabel: 'Workspace',
     items: [
       { icon: 'LayoutDashboard', label: 'Overview', href: '/dashboard' }

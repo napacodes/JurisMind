@@ -8,7 +8,7 @@
     "start": "next start --hostname 0.0.0.0",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/auth-flow.test.ts test/content.test.tsx",
+    "test": "tsx --test test/auth-flow.test.ts test/content.test.tsx test/platform-admin-overview.test.ts",
     "clean": "node -e \"require('node:fs').rmSync('.next', { recursive: true, force: true })\""
   },
   "dependencies": {

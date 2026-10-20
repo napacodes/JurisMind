@@ -53,6 +53,7 @@ test("platform user administration is Super Admin-only, bounded, audited, and is
     platformRoleGrants: { some: { role: "SUPER_ADMIN" as const, revokedAt: null } },
   };
   const requestIds: string[] = [];
+  const createdAdminEmail = `new-platform-admin-${randomUUID()}@example.invalid`;
   const functionName = `phase13_fail_audit_${randomUUID().replaceAll("-", "")}`;
   const triggerName = functionName;
   let triggerCreated = false;
@@ -141,6 +142,17 @@ test("platform user administration is Super Admin-only, bounded, audited, and is
     assert.equal(details.status, "ACTIVE");
     assert.equal(JSON.stringify(details).includes("passwordHash"), false);
     assert.equal(JSON.stringify(details).includes("tokenHash"), false);
+
+    const createAdminResponse = await request("/api/platform-admin/users", "POST", 0, { fullName: "New Platform Admin", email: createdAdminEmail, password: "safe-password-12345" });
+    assert.equal(createAdminResponse.status, 201, "an authorized Super Admin can create another administrator");
+    const createdAdmin = await createAdminResponse.json() as { id: string; email: string; platformRoles: string[] };
+    assert.equal(createdAdmin.email, createdAdminEmail);
+    assert.deepEqual(createdAdmin.platformRoles, ["SUPER_ADMIN"]);
+    assert.equal(await prisma.user.count({ where: { emailNormalized: createdAdminEmail } }), 1);
+    assert.equal(await prisma.platformRoleGrant.count({ where: { userId: createdAdmin.id, role: "SUPER_ADMIN", revokedAt: null } }), 1);
+
+    const duplicateCreateResponse = await request("/api/platform-admin/users", "POST", 0, { fullName: "Duplicate", email: createdAdminEmail, password: "safe-password-12345" });
+    assert.equal(duplicateCreateResponse.status, 409, "duplicate email addresses are rejected");
 
     for (const invalidQuery of ["page=0", "pageSize=101", "role=PLATFORM_OWNER", "status=LOCKED", "workspaceKind=PERSONAL", "unknown=1"]) {
       assert.equal((await request(`/api/platform-admin/users?${invalidQuery}`)).status, 400, `reject ${invalidQuery}`);

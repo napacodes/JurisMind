@@ -157,6 +157,50 @@ test("password hashing uses Argon2id and verifies only the correct password", as
   assert.equal(await passwordHasher.verify(password, encoded), true);
   assert.equal(await passwordHasher.verify("wrong-password", encoded), false);
   await assert.rejects(passwordHasher.hash("short", environment.passwordMinLength));
+})
+
+test("password verification accepts the exact encoded format produced by the hasher", async () => {
+  const encoded = await passwordHasher.hash(password, environment.passwordMinLength);
+  // The serialized cost parameters are emitted by node-argon2 in m,p,t order; the hasher
+  // must accept its own output or every sign-in fails with the generic credential error.
+  assert.match(encoded, /^\$argon2id\$v=19\$m=19456,p=1,t=2\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$/);
+  assert.equal(await passwordHasher.verify(password, encoded), true);
+
+  // Parameter order is not part of the hash strength, so an equivalent ordering verifies too.
+  const [, algorithm, version, parameters, salt, digest] = encoded.split("$");
+  const reordered = `$${algorithm}$${version}$t=2,m=19456,p=1$${salt}$${digest}`;
+  assert.equal(await passwordHasher.verify(password, reordered), true);
+})
+
+test("password verification safely rejects unsupported, weakened, and malformed hashes", async () => {
+  const encoded = await passwordHasher.hash(password, environment.passwordMinLength);
+  const [, , , parameters, salt, digest] = encoded.split("$");
+  const withParameters = (value: string) => `$argon2id$v=19$${value}$${salt}$${digest}`;
+  const rejected = [
+    "",
+    "not-a-hash",
+    "$argon2id$test-placeholder",
+    `$argon2i$v=19$${parameters}$${salt}$${digest}`,
+    `$argon2d$v=19$${parameters}$${salt}$${digest}`,
+    `$argon2id$v=16$${parameters}$${salt}$${digest}`,
+    withParameters("m=8192,p=1,t=2"),
+    withParameters("m=19456,p=1,t=1"),
+    withParameters("m=19456,p=2,t=2"),
+    withParameters("m=19456,p=1"),
+    withParameters("m=19456,p=1,t=2,k=1"),
+    withParameters("m=19456,m=19456,p=1,t=2"),
+    withParameters("m=abc,p=1,t=2"),
+    `$argon2id$v=19$$${salt}$${digest}`,
+    `$argon2id$v=19$m=19456,p=1,t=2$${salt}$short`,
+    `$argon2id$v=19$m=19456,p=1,t=2$${salt}$${digest}x`,
+  ];
+  for (const candidate of rejected) {
+    assert.equal(await passwordHasher.verify(password, candidate), false, `expected rejection of ${candidate.slice(0, 24)}`);
+  }
+
+  // A malformed hash must fail closed instead of reaching argon2 and throwing.
+  await assert.doesNotReject(passwordHasher.verify(password, "$argon2id$v=19$m=19456,p=1,t=2$invalid$invalid"));
+  assert.equal(await passwordHasher.verify(password, `$argon2id$v=19$${parameters}$${salt}$${digest}`), true);
 });
 
 test("MFA-enrolled password login creates only a challenge, never a session", async () => {

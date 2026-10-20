@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Inject, Param, Patch, Query, Req, Res, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Headers, Inject, Param, Patch, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
 import type { Response } from "express";
 import { SessionAuthGuard } from "../auth/session-auth.guard";
 import { CsrfOriginGuard } from "../auth/csrf-origin.guard";
@@ -7,7 +7,7 @@ import type { AuthorizationRequest } from "../authorization/authorization.types"
 import { Permission } from "../authorization/permissions";
 import { PermissionsGuard } from "../authorization/permissions.guard";
 import { RequirePermission } from "../authorization/require-permission.decorator";
-import { parsePlatformUserId, parsePlatformUserListQuery, parsePlatformUserStatus } from "./platform-users.dto";
+import { parseCreatePlatformAdminInput, parsePlatformUserId, parsePlatformUserListQuery, parsePlatformUserStatus } from "./platform-users.dto";
 import { PlatformUsersService } from "./platform-users.service";
 
 /** Platform-wide account administration; practice roles never authorize these routes. */
@@ -15,6 +15,16 @@ import { PlatformUsersService } from "./platform-users.service";
 @UseGuards(SessionAuthGuard)
 export class PlatformUsersController {
   constructor(@Inject(PlatformUsersService) private readonly users: PlatformUsersService) {}
+
+  @Post()
+  @UseGuards(CsrfOriginGuard, PermissionsGuard)
+  @RequirePermission(Permission.PlatformAdministration)
+  create(@Body() body: unknown, @Req() request: AuthorizationRequest,
+    @Headers("x-request-id") requestId: string | undefined, @Res({ passthrough: true }) response: Response) {
+    response.setHeader("Cache-Control", "no-store");
+    return this.users.createAdmin(parseCreatePlatformAdminInput(body),
+      request.authorizationContext!.user.id, request.authenticatedSessionId!, createRequestId(requestId));
+  }
 
   @Get()
   @UseGuards(PermissionsGuard)

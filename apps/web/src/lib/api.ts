@@ -2,6 +2,7 @@ export type PracticeRole = 'FIRM_ADMIN' | 'LAWYER' | 'ASSISTANT'
 export type WorkspaceKind = 'FIRM' | 'INDIVIDUAL'
 
 export type CurrentUser = { id: string; email: string; fullName: string; platformRoles?: string[] }
+export type CurrentUserResponse = { user: CurrentUser; platformRoles: string[] }
 export type WorkspaceMembership = {
   id: string
   name: string
@@ -125,12 +126,15 @@ export const api = {
   mfaConfirmEnrollment: (code: string) => apiRequest<{ enabled: true; recoveryCodes: string[] }>('/auth/mfa/enrollment/confirm', { method: 'POST', body: { code }, headers: requestHeaders() }),
   mfaDisable: (password: string, code: string) => apiRequest<{ disabled: true }>('/auth/mfa/disable', { method: 'POST', body: { password, code }, headers: requestHeaders() }),
   mfaRegenerateRecoveryCodes: (password: string, code: string) => apiRequest<{ recoveryCodes: string[] }>('/auth/mfa/recovery-codes/regenerate', { method: 'POST', body: { password, code }, headers: requestHeaders() }),
-  currentUser: () => apiRequest<{ user: CurrentUser; platformRoles: string[] }>('/auth/me'),
+  currentUser: () => apiRequest<CurrentUserResponse>('/auth/me'),
   platformUsers: (query: { page: number; pageSize: number; search?: string; role?: string; status?: string; workspaceKind?: string }) => {
     const params = new URLSearchParams()
     for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
     return apiRequest<PlatformUserPage>(`/platform-admin/users?${params.toString()}`)
   },
+  createPlatformAdmin: (input: { fullName: string; email: string; password: string }) => apiRequest<{
+    id: string; email: string; fullName: string; status: 'ACTIVE' | 'DISABLED'; createdAt: string; platformRoles: string[]
+  }>('/platform-admin/users', { method: 'POST', body: input, headers: requestHeaders() }),
   platformUser: (userId: string) => apiRequest<PlatformUserDetail>(`/platform-admin/users/${encodeURIComponent(userId)}`),
   changePlatformUserStatus: (userId: string, status: 'ACTIVE' | 'DISABLED') => apiRequest<{ id: string; status: 'ACTIVE' | 'DISABLED'; changed: boolean }>(
     `/platform-admin/users/${encodeURIComponent(userId)}/status`,
@@ -256,6 +260,13 @@ export function safeReturnTo(value: string | null | undefined, fallback = '/work
   } catch {
     return fallback
   }
+}
+
+export function preferredPostLoginDestination(current: CurrentUserResponse | null | undefined, value: string | null | undefined): string {
+  const safe = safeReturnTo(value, '/workspaces')
+  if (!current?.platformRoles.includes('SUPER_ADMIN')) return safe
+  if (safe === '/administration/users' || safe.startsWith('/administration/')) return safe
+  return '/administration/users'
 }
 
 export function allowedWorkspaceNavigation(permissions: readonly string[]) {
