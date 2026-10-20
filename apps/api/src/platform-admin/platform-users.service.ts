@@ -8,12 +8,14 @@ import {
 } from "@nestjs/common";
 import { MembershipRole, UserStatus } from "../generated/prisma/enums";
 import { Prisma } from "../generated/prisma/client";
+import { AUTH_ENVIRONMENT, AuthEnvironment } from "../auth/auth.types";
+import { PasswordHasherService } from "../auth/password-hasher.service";
 import { AuthorizationContextService } from "../authorization/authorization-context.service";
 import { AuthorizationService } from "../authorization/authorization.service";
 import { Permission } from "../authorization/permissions";
 import { PrismaService } from "../database/prisma.service";
 import type { AuthorizationContext } from "../authorization/authorization.types";
-import type { PlatformUserListQuery } from "./platform-users.dto";
+import type { CreatePlatformAdminInput, PlatformUserListQuery } from "./platform-users.dto";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -21,6 +23,8 @@ type Transaction = Prisma.TransactionClient;
 export class PlatformUsersService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(AUTH_ENVIRONMENT) private readonly environment: AuthEnvironment,
+    @Inject(PasswordHasherService) private readonly passwordHasher: PasswordHasherService,
     @Inject(AuthorizationContextService) private readonly contexts: AuthorizationContextService,
     @Inject(AuthorizationService) private readonly authorization: AuthorizationService,
   ) {}
@@ -78,6 +82,46 @@ export class PlatformUsersService {
       const { platformRoleGrants, ...safeUser } = user;
       return { ...safeUser, platformRoles: platformRoleGrants.map((grant) => grant.role) };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }
+
+  async createAdmin(input: CreatePlatformAdminInput, actorId: string, sessionId: string, requestId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.requireAdmin(tx, actorId, sessionId);
+      const emailNormalized = input.email.trim().toLowerCase();
+      const existingUser = await tx.user.findUnique({ where: { emailNormalized }, select: { id: true, email: true } });
+      if (existingUser) throw new ConflictException("An account with that email already exists.");
+      this.passwordHasher.assertValidPassword(input.password, this.environment.passwordMinLength);
+      const passwordHash = await this.passwordHasher.hash(input.password, this.environment.passwordMinLength);
+      const fullName = input.fullName.trim();
+      const created = await tx.user.create({
+        data: {
+          email: emailNormalized,
+          emailNormalized,
+          fullName,
+          passwordHash,
+          status: "ACTIVE",
+        },
+        select: { id: true, email: true, fullName: true, status: true, createdAt: true },
+      });
+      await tx.platformRoleGrant.create({
+        data: {
+          userId: created.id,
+          role: "SUPER_ADMIN",
+          grantedById: actorId,
+        },
+      });
+      await tx.securityAuditEvent.create({
+        data: {
+          actorUserId: actorId,
+          eventType: "PLATFORM_ADMIN_CREATED",
+          targetType: "User",
+          targetId: created.id,
+          requestId,
+          metadata: { email: emailNormalized, fullName, platformRole: "SUPER_ADMIN" },
+        },
+      });
+      return { ...created, platformRoles: ["SUPER_ADMIN"] };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
   }
 
   async changeStatus(userId: string, status: UserStatus, actorId: string, sessionId: string, requestId: string) {

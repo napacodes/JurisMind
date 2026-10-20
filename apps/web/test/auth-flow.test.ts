@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
-import { ApiError, allowedWorkspaceNavigation, api, apiBaseUrl, invitationTokenFromFragment, safeReturnTo } from '../src/lib/api'
+import { ApiError, allowedWorkspaceNavigation, api, apiBaseUrl, invitationTokenFromFragment, preferredPostLoginDestination, safeReturnTo } from '../src/lib/api'
 import { individualPracticeSchema, loginSchema } from '../src/lib/auth-schemas'
 import { resetTokenFromFragment } from '../src/views/pages/auth/reset-password/reset-password-form'
 import { platformUserListState, platformUserMutationNotice, platformUserStatusAction } from '../src/views/platform-admin/platform-user-ui-state'
+import { consumeLoginSuccessToast, queueLoginSuccessToast } from '../src/lib/login-success-toast'
 
 const originalFetch = globalThis.fetch
 const originalApiUrl = process.env.NEXT_PUBLIC_API_BASE_URL
@@ -129,6 +130,38 @@ test('safe return destinations reject protocol-relative and credential-like redi
   assert.equal(safeReturnTo('https://evil.example'), '/workspaces')
   assert.equal(safeReturnTo('/pages/auth/login?returnTo=/dashboard'), '/workspaces')
   assert.equal(safeReturnTo('/\\evil.example'), '/workspaces')
+})
+
+test('post-login routing sends platform administrators to the dashboard while preserving workspace flow for others', () => {
+  const superAdmin = { user: { id: 'admin-1', email: 'admin@jurismind.com', fullName: 'Admin User' }, platformRoles: ['SUPER_ADMIN'] }
+  const lawyer = { user: { id: 'lawyer-1', email: 'lawyer@example.test', fullName: 'Lawyer User' }, platformRoles: [] }
+  const dualUser = { user: { id: 'dual-1', email: 'dual@example.test', fullName: 'Dual User' }, platformRoles: ['SUPER_ADMIN', 'LAWYER'] }
+
+  assert.equal(preferredPostLoginDestination(superAdmin, undefined), '/administration/users')
+  assert.equal(preferredPostLoginDestination(superAdmin, '/workspaces'), '/administration/users')
+  assert.equal(preferredPostLoginDestination(superAdmin, '/administration/content'), '/administration/content')
+  assert.equal(preferredPostLoginDestination(lawyer, '/workspaces'), '/workspaces')
+  assert.equal(preferredPostLoginDestination(lawyer, '/dashboard?workspaceId=abc'), '/dashboard?workspaceId=abc')
+  assert.equal(preferredPostLoginDestination(dualUser, '/workspaces'), '/administration/users')
+  assert.equal(preferredPostLoginDestination(null, '/pages/auth/login?returnTo=/dashboard'), '/workspaces')
+  assert.equal(preferredPostLoginDestination(null, 'https://evil.example'), '/workspaces')
+})
+
+test('login success toast signal is destination-scoped, one-time, and expires', () => {
+  const values = new Map<string, string>()
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+    removeItem: (key: string) => { values.delete(key) },
+  }
+
+  queueLoginSuccessToast('/administration/users?from=login#top', storage, 1_000)
+  assert.equal(consumeLoginSuccessToast('/administration/users', storage, 1_500), false)
+  assert.equal(consumeLoginSuccessToast('/administration/users?from=login', storage, 1_500), true)
+  assert.equal(consumeLoginSuccessToast('/administration/users?from=login', storage, 1_500), false)
+
+  queueLoginSuccessToast('/workspaces', storage, 1_000)
+  assert.equal(consumeLoginSuccessToast('/workspaces', storage, 62_000), false)
 })
 
 test('invitation secrets are read only from URL fragments and require a valid token shape', () => {

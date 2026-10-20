@@ -30,6 +30,6 @@ import { ConfiguredPasswordResetDelivery, PASSWORD_RESET_DELIVERY } from "./pass
     ConfiguredPasswordResetDelivery,
     { provide: PASSWORD_RESET_DELIVERY, useExisting: ConfiguredPasswordResetDelivery },
   ],
-  exports: [SessionAuthGuard, CsrfOriginGuard, AuthService, AUTH_ENVIRONMENT],
+  exports: [SessionAuthGuard, CsrfOriginGuard, AuthService, PasswordHasherService, AUTH_ENVIRONMENT],
 })
 export class AuthModule {}

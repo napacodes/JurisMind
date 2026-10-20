@@ -63,7 +63,7 @@ export default function PlatformContentPage() {
     catch { setNotice('Authorized preview could not be loaded.') }
   }
 
-  return <main className='space-y-6'>
+  return <div className='space-y-6'>
     <header className='flex flex-wrap items-start justify-between gap-3'><div><p className='text-sm font-medium text-primary'>Platform administration</p><h1 className='mt-1 text-3xl font-semibold tracking-tight'>Website content</h1><p className='mt-2 max-w-2xl text-sm text-muted-foreground'>Manage public articles and informational pages. Draft previews are visible only to Super Admins.</p></div>
       <div className='flex gap-2'><Button variant='outline' onClick={() => void refresh()}><RefreshCw className='size-4' />Refresh</Button><Button onClick={() => { setSelected(null); setForm(blank); setPreview(null) }}><FilePlus2 className='size-4' />New content</Button></div>
     </header>
@@ -91,5 +91,5 @@ export default function PlatformContentPage() {
       </section>
     </div>
     {notice && <p role='status' className='text-sm text-muted-foreground'>{notice}</p>}
-  </main>
+  </div>
 }

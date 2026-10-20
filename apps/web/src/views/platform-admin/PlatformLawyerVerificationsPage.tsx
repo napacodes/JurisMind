@@ -64,7 +64,7 @@ export default function PlatformLawyerVerificationsPage() {
     } finally { setBusy(false) }
   }
 
-  return <main className='space-y-6'>
+  return <div className='space-y-6'>
     <header className='flex flex-wrap items-start justify-between gap-3'><div><p className='text-sm font-medium text-primary'>Platform administration</p><h1 className='mt-1 text-3xl font-semibold tracking-tight'>Lawyer credential review</h1><p className='mt-2 max-w-2xl text-sm text-muted-foreground'>Review submitted professional-card details and documents. An approval records the platform review decision; it is not a legal determination or external credential authentication.</p></div>
       <Button variant='outline' onClick={() => { void refresh() }} disabled={loading}><RefreshCw className='size-4' />Refresh</Button></header>
     <section className='space-y-3' aria-labelledby='pending-title'><h2 id='pending-title' className='text-lg font-semibold'>Pending submissions {queue ? `(${queue.pagination.total})` : ''}</h2>
@@ -81,5 +81,5 @@ export default function PlatformLawyerVerificationsPage() {
         <div className='flex flex-wrap gap-2'><Button onClick={() => void review('APPROVED')} disabled={busy}><CheckCircle2 className='size-4' />Approve</Button><Button variant='destructive' onClick={() => void review('REJECTED')} disabled={busy || !reason.trim()}>Reject submission</Button><Button variant='ghost' onClick={() => setSelected(null)} disabled={busy}>Close</Button></div>
       </CardContent></Card>}
     {notice && <p role='status' className='text-sm text-muted-foreground'>{notice}</p>}
-  </main>
+  </div>
 }

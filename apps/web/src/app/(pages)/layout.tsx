@@ -9,7 +9,6 @@ import Footer from '@/components/layout/Footer'
 import Header from '@/components/layout/Header'
 import Sidebar from '@/components/layout/Sidebar'
 import { SidebarInset } from '@/components/ui/sidebar'
-import { Toaster } from '@/components/ui/sonner'
 import { AuthProvider } from '@/components/auth/AuthProvider'
 import { AuthGate, LoadingState } from '@/components/auth/AuthGate'
 
@@ -27,7 +26,6 @@ const ProtectedPages = ({ children }: Readonly<{ children: ReactNode }>) => (
               </div>
               {children}
             </main>
-            <Toaster />
             <Footer />
           </SidebarInset>
         </div>

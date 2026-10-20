@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Search, ShieldCheck, UserRound, UsersRound } from 'lucide-react'
+import { Search, ShieldCheck, UserPlus, UserRound, UsersRound } from 'lucide-react'
 import { ApiError, api } from '@/lib/api'
 import type { PlatformUserDetail, PlatformUserPage, PlatformUserSummary } from '@/lib/api'
 import { Badge } from '@/components/ui/badge'
@@ -46,6 +46,9 @@ export default function PlatformUsersPage() {
   const [refreshCount, setRefreshCount] = useState(0)
   const [detail, setDetail] = useState<PlatformUserDetail | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createForm, setCreateForm] = useState({ fullName: '', email: '', password: '' })
+  const [creating, setCreating] = useState(false)
   const [pending, setPending] = useState<{ user: PlatformUserSummary; status: 'ACTIVE' | 'DISABLED' } | null>(null)
   const [mutating, setMutating] = useState(false)
   const listState = platformUserListState(loading, Boolean(error && !result), result?.users.length ?? 0)
@@ -96,6 +99,40 @@ export default function PlatformUsersPage() {
     } finally { setMutating(false) }
   }
 
+  async function submitCreateAdmin(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const fullName = createForm.fullName.trim()
+    const email = createForm.email.trim().toLowerCase()
+    const password = createForm.password
+    if (!fullName || fullName.length < 2 || fullName.length > 200) {
+      setError('Enter a full name between 2 and 200 characters.')
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError('Use a valid work email address.')
+      return
+    }
+    if (password.length < 12 || password.length > 256) {
+      setError('Use a password between 12 and 256 characters.')
+      return
+    }
+    setCreating(true)
+    setError('')
+    setNotice('')
+    try {
+      const result = await api.createPlatformAdmin({ fullName, email, password })
+      setNotice(`Created ${result.email} as a platform administrator.`)
+      setCreateOpen(false)
+      setCreateForm({ fullName: '', email: '', password: '' })
+      setLoading(true)
+      setRefreshCount((count) => count + 1)
+    } catch (reason) {
+      setError(showError(reason))
+    } finally {
+      setCreating(false)
+    }
+  }
+
   function submitFilters(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setPage(1)
@@ -109,10 +146,13 @@ export default function PlatformUsersPage() {
     <header className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'>
       <div>
         <p className='text-sm font-medium text-primary'>Platform administration</p>
-        <h1 className='mt-1 text-3xl font-semibold tracking-tight'>Users</h1>
-        <p className='mt-2 max-w-2xl text-sm text-muted-foreground'>Search platform accounts and review practice memberships. Platform access does not grant access to confidential matters.</p>
+        <h1 className='mt-1 text-3xl font-semibold tracking-tight'>Admin users</h1>
+        <p className='mt-2 max-w-2xl text-sm text-muted-foreground'>Manage trusted platform administrators and review their platform access. Practice roles remain separate from platform-wide administration.</p>
       </div>
-      <div className='flex items-center gap-2 text-sm text-muted-foreground'><ShieldCheck className='size-4' aria-hidden='true' />Super Admin access</div>
+      <div className='flex items-center gap-2'>
+        <Button variant='outline' onClick={() => setCreateOpen(true)}><UserPlus className='mr-2 size-4' aria-hidden='true' />Create admin</Button>
+        <div className='flex items-center gap-2 text-sm text-muted-foreground'><ShieldCheck className='size-4' aria-hidden='true' />Super Admin access</div>
+      </div>
     </header>
 
     {error && <p role='alert' className='rounded-md border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive'>{error}</p>}
@@ -157,6 +197,33 @@ export default function PlatformUsersPage() {
               </> : null}
       </CardContent>
     </Card>
+
+    <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <DialogContent className='sm:max-w-md'>
+        <DialogHeader>
+          <DialogTitle>Create platform admin</DialogTitle>
+          <DialogDescription>Grant platform administration to a trusted user. This action creates a real account with Super Admin privileges on the server.</DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submitCreateAdmin} className='space-y-4'>
+          <div className='space-y-2'>
+            <label className='text-sm font-medium'>Full name</label>
+            <Input value={createForm.fullName} onChange={(event) => setCreateForm({ ...createForm, fullName: event.target.value })} placeholder='Jordan Lee' />
+          </div>
+          <div className='space-y-2'>
+            <label className='text-sm font-medium'>Work email</label>
+            <Input type='email' value={createForm.email} onChange={(event) => setCreateForm({ ...createForm, email: event.target.value })} placeholder='jordan@jurismind.com' />
+          </div>
+          <div className='space-y-2'>
+            <label className='text-sm font-medium'>Password</label>
+            <Input type='password' value={createForm.password} onChange={(event) => setCreateForm({ ...createForm, password: event.target.value })} placeholder='At least 12 characters' />
+          </div>
+          <DialogFooter>
+            <Button type='button' variant='outline' onClick={() => setCreateOpen(false)} disabled={creating}>Cancel</Button>
+            <Button type='submit' disabled={creating}>{creating ? 'Creating…' : 'Create admin'}</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
 
     <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
       <DialogContent className='max-h-[85vh] overflow-y-auto sm:max-w-xl'>

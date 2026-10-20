@@ -13,6 +13,12 @@ export interface PlatformUserListQuery {
   workspaceKind?: WorkspaceKind;
 }
 
+export interface CreatePlatformAdminInput {
+  fullName: string;
+  email: string;
+  password: string;
+}
+
 function scalar(value: unknown, label: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw new BadRequestException(`Invalid ${label}.`);
@@ -65,6 +71,31 @@ export function parsePlatformUserStatus(raw: unknown): UserStatus {
     throw new BadRequestException("Invalid account status.");
   }
   return body.status as UserStatus;
+}
+
+export function parseCreatePlatformAdminInput(raw: unknown): CreatePlatformAdminInput {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new BadRequestException("Invalid request body.");
+  const body = raw as Record<string, unknown>;
+  if (Object.keys(body).some((key) => !["fullName", "email", "password"].includes(key))) {
+    throw new BadRequestException("Only full name, email, and password are accepted.");
+  }
+
+  const fullName = typeof body.fullName === "string" ? body.fullName.trim() : undefined;
+  if (!fullName || fullName.length < 2 || fullName.length > 200 || /[\u0000-\u001f]/.test(fullName)) {
+    throw new BadRequestException("A valid full name is required.");
+  }
+
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : undefined;
+  if (!email || email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new BadRequestException("A valid email address is required.");
+  }
+
+  const password = typeof body.password === "string" ? body.password : undefined;
+  if (!password || password.length < 12 || password.length > 256 || Buffer.byteLength(password, "utf8") > 1024) {
+    throw new BadRequestException("Use a password between 12 and 256 characters.");
+  }
+
+  return { fullName, email, password };
 }
 
 export function parsePlatformUserId(value: string): string {

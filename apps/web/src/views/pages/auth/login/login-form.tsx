@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { Eye, EyeOff, LoaderCircle } from 'lucide-react'
-import { api, ApiError, safeReturnTo } from '@/lib/api'
+import { api, ApiError, preferredPostLoginDestination } from '@/lib/api'
+import { queueLoginSuccessToast } from '@/lib/login-success-toast'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { loginSchema } from '@/lib/auth-schemas'
@@ -41,10 +42,16 @@ export default function LoginForm({ returnTo = '/workspaces', onAuthenticated }:
 
   async function finishAuthentication() {
       // Confirm the new server-managed cookie before changing authenticated UI state.
-      await api.currentUser()
+      const current = await api.currentUser()
       await api.workspaces()
-      if (onAuthenticated) await onAuthenticated()
-      else router.replace(safeReturnTo(returnTo))
+      const destination = preferredPostLoginDestination(current, returnTo)
+      if (onAuthenticated) {
+        await onAuthenticated()
+        queueLoginSuccessToast(destination)
+      } else {
+        queueLoginSuccessToast(destination)
+        router.replace(destination)
+      }
   }
 
   const submitMfa = async () => {
