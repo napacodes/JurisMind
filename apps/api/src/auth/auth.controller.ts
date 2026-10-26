@@ -25,6 +25,8 @@ import { SessionAuthGuard } from "./session-auth.guard";
 import { PasswordRecoveryService } from "./password-recovery.service";
 import { ConfiguredPasswordResetDelivery } from "./password-reset-delivery";
 import { MfaService } from "./mfa.service";
+import { RegistrationService } from "./registration.service";
+import { parseAccountRegistration } from "./registration.dto";
 
 @Controller("api/auth")
 export class AuthController {
@@ -34,7 +36,33 @@ export class AuthController {
     private readonly passwordRecovery: PasswordRecoveryService,
     private readonly mfaService: MfaService,
     private readonly resetDelivery: ConfiguredPasswordResetDelivery,
+    private readonly registrations: RegistrationService,
   ) {}
+
+  @Post("register/firm")
+  @UseGuards(CsrfOriginGuard)
+  async registerFirm(@Body() body: unknown, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    return this.completeRegistration("firm", body, request, response);
+  }
+
+  @Post("register/lawyer")
+  @UseGuards(CsrfOriginGuard)
+  async registerLawyer(@Body() body: unknown, @Req() request: Request, @Res({ passthrough: true }) response: Response) {
+    return this.completeRegistration("lawyer", body, request, response);
+  }
+
+  private async completeRegistration(kind: "firm" | "lawyer", body: unknown, request: Request, response: Response) {
+    response.setHeader("Cache-Control", "no-store");
+    const result = await this.registrations.register(kind, parseAccountRegistration(body, kind),
+      request.ip ?? "unknown", createRequestId(request.header("x-request-id")));
+    response.clearCookie(mfaChallengeCookieName(this.environment), {
+      httpOnly: true, secure: this.environment.nodeEnv === "production", sameSite: "lax", path: "/",
+    });
+    response.cookie(sessionCookieName(this.environment), result.rawSessionToken, {
+      httpOnly: true, secure: this.environment.nodeEnv === "production", sameSite: "lax", path: "/", expires: result.expiresAt,
+    });
+    return { user: result.user, expiresAt: result.expiresAt.toISOString(), mfaRequired: false as const };
+  }
 
   @Post("login")
   @HttpCode(200)

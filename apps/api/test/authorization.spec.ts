@@ -39,6 +39,7 @@ test("practice permission catalogue is explicit for every role and workspace kin
     Permission.ReadWorkspaceMemberships,
     Permission.ManageWorkspaceMemberships,
     Permission.ManageAssistantAssignments,
+    Permission.SubmitFirmVerification,
   ]);
   assert.deepEqual(permissionsForPracticeRole(MembershipRole.FIRM_ADMIN, WorkspaceKind.INDIVIDUAL), []);
   assert.deepEqual(permissionsForPracticeRole(MembershipRole.LAWYER, WorkspaceKind.FIRM), [Permission.ReadWorkspaceMetadata, Permission.ManageAssistantAssignments, Permission.SubmitLawyerCredentialVerification]);

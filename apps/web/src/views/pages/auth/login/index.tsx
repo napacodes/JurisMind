@@ -1,25 +1,23 @@
 import Link from 'next/link'
-import Logo from '@/components/shared/Logo'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { AuthShell } from '@/components/auth/AuthShell'
 import LoginForm from './login-form'
 
-export default function Login({ returnTo = '/workspaces' }: { returnTo?: string }) {
+type Audience = 'firm' | 'lawyer' | 'assistant' | 'administration' | 'general'
+
+export default function Login({ returnTo = '/workspaces', audience = 'general' }: { returnTo?: string; audience?: Audience }) {
+  const label = audience === 'administration' ? 'Platform administration' : audience === 'assistant' ? 'Assistant access' : audience === 'firm' ? 'Firm access' : audience === 'lawyer' ? 'Lawyer access' : 'Secure access'
+  const title = audience === 'administration' ? 'Platform Admin sign in' : 'Sign in to JurisMind'
+  const description = audience === 'administration'
+    ? 'Restricted access for platform operators. Your active server-side platform grant determines access to administration tools.'
+    : 'Use your account credentials. Your active memberships and platform grants determine where you can go.'
+  const registrationHref = audience === 'firm' ? '/firm/register' : audience === 'lawyer' ? '/lawyer/register' : null
   return (
-    <main className='grid min-h-[calc(100vh-2.5rem)] place-items-center px-4 py-12 sm:px-6'>
-      <Card className='w-full max-w-md gap-6 p-6 sm:p-8'>
-        <CardHeader className='gap-5 p-0'>
-          <Link href='/' aria-label='JurisMind home'><Logo className='gap-3' /></Link>
-          <div className='space-y-2'>
-            <CardTitle className='text-2xl'>Sign in to JurisMind</CardTitle>
-            <CardDescription>Use your existing JurisMind account to continue to your workspace.</CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className='space-y-5 p-0'>
-          <LoginForm returnTo={returnTo} />
-          <p className='text-center text-xs text-muted-foreground'>Account creation and password recovery are not available here.</p>
-          <p className='text-center text-sm'><Link className='text-primary underline-offset-4 hover:underline' href='/'>Return to JurisMind</Link></p>
-        </CardContent>
-      </Card>
-    </main>
+    <AuthShell eyebrow={label} title={title} description={description} administration={audience === 'administration'}>
+      <LoginForm returnTo={returnTo} />
+      {registrationHref && <p className='mt-5 text-center text-sm text-slate-400'>New to JurisMind? <Link className='text-teal-200 underline-offset-4 hover:underline' href={registrationHref}>Create an account</Link></p>}
+      {audience !== 'administration' && <p className='mt-4 text-center text-sm text-slate-400'>Joining a team? <Link className='text-teal-200 underline-offset-4 hover:underline' href={audience === 'assistant' ? '/assistant/invitations/accept' : '/firm/invitations/accept'}>Accept an invitation</Link></p>}
+      {audience === 'administration' && <p className='mt-4 text-center text-sm text-slate-400'>Practice account? <Link className='text-teal-200 underline-offset-4 hover:underline' href='/firm/login'>Sign in to a workspace</Link></p>}
+      <p className='mt-4 text-center text-xs text-slate-500'><Link href='/' className='underline-offset-4 hover:underline'>Return to JurisMind</Link></p>
+    </AuthShell>
   )
 }

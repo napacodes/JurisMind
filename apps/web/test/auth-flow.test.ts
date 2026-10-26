@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
-import { ApiError, allowedWorkspaceNavigation, api, apiBaseUrl, invitationTokenFromFragment, preferredPostLoginDestination, safeReturnTo } from '../src/lib/api'
+import { ApiError, allowedWorkspaceNavigation, api, apiBaseUrl, invitationTokenFromFragment, preferredPostLoginDestination, resolveWorkspaceSelection, safeReturnTo } from '../src/lib/api'
 import { individualPracticeSchema, loginSchema } from '../src/lib/auth-schemas'
 import { resetTokenFromFragment } from '../src/views/pages/auth/reset-password/reset-password-form'
 import { platformUserListState, platformUserMutationNotice, platformUserStatusAction } from '../src/views/platform-admin/platform-user-ui-state'
+import { navItems, navItemsForPermissions } from '../src/configs/navConfig'
 import { consumeLoginSuccessToast, queueLoginSuccessToast } from '../src/lib/login-success-toast'
 
 const originalFetch = globalThis.fetch
@@ -124,6 +125,26 @@ test('invitation and provisioning calls use credentialed backend contracts and r
   assert.equal(provision?.init?.body, JSON.stringify({ name: 'Cedar Legal' }))
 })
 
+test('verification clients expose workspace-scoped draft and jurisdiction policy endpoints', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = []
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), init })
+    const value = String(input).includes('/policy?')
+      ? String(input).includes('legalForm') ? { requiredDocuments: ['REGISTRATION'] } : { required: false }
+      : { id: 'draft-1', status: 'DRAFT', createdAt: '2026-01-01T00:00:00.000Z' }
+    return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  assert.deepEqual(await api.firmKycDocumentPolicy('firm-1', 'Example District', 'LLC'), { requiredDocuments: ['REGISTRATION'] })
+  assert.deepEqual(await api.lawyerCredentialDocumentPolicy('firm-1', 'Example District'), { required: false })
+  await api.saveFirmVerificationDraft('firm-1', { legalName: 'Example Legal' })
+  await api.saveLawyerVerificationDraft('firm-1', { cardHolderName: 'Alex Lawyer' })
+  assert.equal(requests[0]?.url.endsWith('/workspaces/firm-1/firm-verification/policy?jurisdiction=Example%20District&legalForm=LLC'), true)
+  assert.equal(requests[1]?.url.endsWith('/workspaces/firm-1/lawyer-verification/policy?jurisdiction=Example%20District'), true)
+  assert.equal(requests[2]?.init?.method, 'PUT')
+  assert.equal(requests[3]?.init?.method, 'PUT')
+  assert.equal(requests.every((request) => request.init?.credentials === 'include' && request.init.cache === 'no-store'), true)
+})
+
 test('safe return destinations reject protocol-relative and credential-like redirects', () => {
   assert.equal(safeReturnTo('/dashboard?workspaceId=abc'), '/dashboard?workspaceId=abc')
   assert.equal(safeReturnTo('//evil.example'), '/workspaces')
@@ -132,19 +153,39 @@ test('safe return destinations reject protocol-relative and credential-like redi
   assert.equal(safeReturnTo('/\\evil.example'), '/workspaces')
 })
 
-test('post-login routing sends platform administrators to the dashboard while preserving workspace flow for others', () => {
+test('post-login routing sends each authorized practice role to its existing workspace dashboard', () => {
   const superAdmin = { user: { id: 'admin-1', email: 'admin@jurismind.com', fullName: 'Admin User' }, platformRoles: ['SUPER_ADMIN'] }
   const lawyer = { user: { id: 'lawyer-1', email: 'lawyer@example.test', fullName: 'Lawyer User' }, platformRoles: [] }
   const dualUser = { user: { id: 'dual-1', email: 'dual@example.test', fullName: 'Dual User' }, platformRoles: ['SUPER_ADMIN', 'LAWYER'] }
+  const firmAdminWorkspace = { id: 'firm-1', name: 'Firm', slug: 'firm', kind: 'FIRM' as const, membershipId: 'm1', role: 'FIRM_ADMIN' as const, permissions: ['workspace:read:metadata'] }
+  const lawyerWorkspace = { id: 'lawyer-1', name: 'Practice', slug: 'practice', kind: 'INDIVIDUAL' as const, membershipId: 'm2', role: 'LAWYER' as const, permissions: ['workspace:read:metadata', 'lawyer-credential:submit:self'] }
+  const assistantWorkspace = { id: 'firm-2', name: 'Firm 2', slug: 'firm-2', kind: 'FIRM' as const, membershipId: 'm3', role: 'ASSISTANT' as const, permissions: ['workspace:read:metadata'] }
 
   assert.equal(preferredPostLoginDestination(superAdmin, undefined), '/administration/users')
   assert.equal(preferredPostLoginDestination(superAdmin, '/workspaces'), '/administration/users')
   assert.equal(preferredPostLoginDestination(superAdmin, '/administration/content'), '/administration/content')
-  assert.equal(preferredPostLoginDestination(lawyer, '/workspaces'), '/workspaces')
-  assert.equal(preferredPostLoginDestination(lawyer, '/dashboard?workspaceId=abc'), '/dashboard?workspaceId=abc')
+  assert.equal(preferredPostLoginDestination(lawyer, '/administration', [lawyerWorkspace]), '/dashboard?workspaceId=lawyer-1',
+    'practice accounts entering the Admin sign-in destination return to their authorized workspace')
+  assert.equal(preferredPostLoginDestination(lawyer, '/workspaces', [firmAdminWorkspace]), '/dashboard?workspaceId=firm-1')
+  assert.equal(preferredPostLoginDestination(lawyer, '/dashboard?workspaceId=lawyer-1', [lawyerWorkspace]), '/dashboard?workspaceId=lawyer-1')
+  assert.equal(preferredPostLoginDestination(lawyer, '/workspaces', [assistantWorkspace]), '/dashboard?workspaceId=firm-2')
+  assert.equal(preferredPostLoginDestination(lawyer, '/lawyer-verification', [lawyerWorkspace]), '/lawyer-verification?workspaceId=lawyer-1')
+  assert.equal(preferredPostLoginDestination(lawyer, '/dashboard?workspaceId=foreign', [lawyerWorkspace]), '/dashboard?workspaceId=lawyer-1')
+  assert.equal(preferredPostLoginDestination(lawyer, '/workspaces', []), '/workspaces')
   assert.equal(preferredPostLoginDestination(dualUser, '/workspaces'), '/administration/users')
   assert.equal(preferredPostLoginDestination(null, '/pages/auth/login?returnTo=/dashboard'), '/workspaces')
   assert.equal(preferredPostLoginDestination(null, 'https://evil.example'), '/workspaces')
+})
+
+test('workspace selection never falls back from an explicit unknown or unauthorized workspace ID', () => {
+  const authorized = { id: 'member-workspace', name: 'Member Workspace', slug: 'member', kind: 'FIRM' as const,
+    membershipId: 'membership-1', role: 'ASSISTANT' as const, permissions: ['workspace:read:metadata'] }
+  const unauthorized = { ...authorized, id: 'restricted-workspace', permissions: [] }
+  assert.deepEqual(resolveWorkspaceSelection([authorized], null), { workspace: authorized, invalidRequest: false })
+  assert.deepEqual(resolveWorkspaceSelection([authorized], authorized.id), { workspace: authorized, invalidRequest: false })
+  assert.deepEqual(resolveWorkspaceSelection([authorized], 'foreign-workspace'), { workspace: undefined, invalidRequest: true })
+  assert.deepEqual(resolveWorkspaceSelection([unauthorized, authorized], unauthorized.id), { workspace: undefined, invalidRequest: true })
+  assert.deepEqual(resolveWorkspaceSelection([authorized], ''), { workspace: undefined, invalidRequest: true })
 })
 
 test('login success toast signal is destination-scoped, one-time, and expires', () => {
@@ -180,10 +221,24 @@ test('password-reset tokens are accepted only from a valid URL fragment', () => 
 
 test('navigation requires the backend workspace permission and excludes unsupported matter links', () => {
   assert.deepEqual(allowedWorkspaceNavigation(['workspace:read:metadata']), ['/dashboard'])
+  assert.deepEqual(allowedWorkspaceNavigation(['workspace:read:memberships']), ['/staff'])
   assert.deepEqual(allowedWorkspaceNavigation(['workspace:read:metadata', 'lawyer-credential:submit:self']), ['/dashboard', '/lawyer-verification'])
   assert.deepEqual(allowedWorkspaceNavigation(['lawyer-credential:submit:self']), ['/lawyer-verification'])
   assert.deepEqual(allowedWorkspaceNavigation(['workspace:read:metadata', 'platform:admin']), ['/dashboard'])
   assert.deepEqual(allowedWorkspaceNavigation(['workspace:read:metadata', 'lawyer-credential:review']), ['/dashboard'])
   assert.deepEqual(allowedWorkspaceNavigation(['platform:admin']), [])
   assert.deepEqual(allowedWorkspaceNavigation(['matter:access:lawyer-private']), [])
+})
+
+test('practice sidebar is scoped to current workspace permissions and contains no platform routes', () => {
+  const firmAdmin = navItemsForPermissions(navItems, ['workspace:read:metadata', 'workspace:read:memberships', 'firm-kyc:submit:self'])
+    .flatMap((group) => group.items.map((item) => item.href))
+  const lawyer = navItemsForPermissions(navItems, ['workspace:read:metadata', 'lawyer-credential:submit:self'])
+    .flatMap((group) => group.items.map((item) => item.href))
+  const assistant = navItemsForPermissions(navItems, ['workspace:read:metadata'])
+    .flatMap((group) => group.items.map((item) => item.href))
+  assert.deepEqual(firmAdmin, ['/dashboard', '/staff', '/firm-verification'])
+  assert.deepEqual(lawyer, ['/dashboard', '/lawyer-verification'])
+  assert.deepEqual(assistant, ['/dashboard'])
+  assert.equal(navItems.flatMap((group) => group.items).some((item) => item.href?.startsWith('/administration')), false)
 })

@@ -43,8 +43,8 @@ export default function LoginForm({ returnTo = '/workspaces', onAuthenticated }:
   async function finishAuthentication() {
       // Confirm the new server-managed cookie before changing authenticated UI state.
       const current = await api.currentUser()
-      await api.workspaces()
-      const destination = preferredPostLoginDestination(current, returnTo)
+      const workspaces = await api.workspaces()
+      const destination = preferredPostLoginDestination(current, returnTo, workspaces)
       if (onAuthenticated) {
         await onAuthenticated()
         queueLoginSuccessToast(destination)

@@ -11,6 +11,7 @@ export const Permission = {
   AccessAssistantAuthorizedResources: "matter:access:assistant-authorized",
   PlatformAdministration: "platform:admin",
   SubmitLawyerCredentialVerification: "lawyer-credential:submit:self",
+  SubmitFirmVerification: "firm-kyc:submit:self",
 } as const;
 
 export type Permission = (typeof Permission)[keyof typeof Permission];
@@ -21,6 +22,7 @@ const FIRM_ADMIN_PERMISSIONS: readonly Permission[] = [
   Permission.ReadWorkspaceMemberships,
   Permission.ManageWorkspaceMemberships,
   Permission.ManageAssistantAssignments,
+  Permission.SubmitFirmVerification,
 ];
 
 const LAWYER_PERMISSIONS: readonly Permission[] = [Permission.ReadWorkspaceMetadata, Permission.ManageAssistantAssignments, Permission.SubmitLawyerCredentialVerification];

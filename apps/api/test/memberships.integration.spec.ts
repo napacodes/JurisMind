@@ -128,6 +128,9 @@ test("membership and assistant workflows enforce workspace scope, audit atomical
     const assign = (workspace: string, assistant: string, actor: string, supervisor: string, requestId: string) =>
       service.assignAssistant(workspace, assistant, actor, sessionIds[actor]!, supervisor, requestId);
 
+    assert.equal((await listAssistants(workspaceId, lawyerAMembershipId, lawyerAId)).length, 2,
+      "one lawyer can support multiple assistants within the same firm");
+
     const invitedAssignmentRequest = randomUUID(); auditIds.push(invitedAssignmentRequest);
     const preparedInvite = await assign(workspaceId, invitedAssistantMembershipId, adminId,
       lawyerAMembershipId, invitedAssignmentRequest);

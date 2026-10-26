@@ -1,9 +1,10 @@
 import {
-  ConflictException, ForbiddenException, Inject, Injectable, NotFoundException,
+  BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
 import { Prisma } from "../generated/prisma/client";
 import { LawyerCredentialSubmissionStatus } from "../generated/prisma/enums";
+import { lawyerCredentialDocumentRequiredFor } from "../config/env.validation";
 import { AuthorizationContextService } from "../authorization/authorization-context.service";
 import { AuthorizationService } from "../authorization/authorization.service";
 import { Permission } from "../authorization/permissions";
@@ -11,7 +12,7 @@ import { PrismaService } from "../database/prisma.service";
 import { AUTH_ENVIRONMENT, AuthEnvironment } from "../auth/auth.types";
 import { createRequestId } from "../auth/auth.service";
 import { CredentialSubmissionInput } from "./lawyer-verification.dto";
-import { ValidCredentialFile } from "./credential-document";
+import { scopeCredentialStorageKey, ValidCredentialFile } from "./credential-document";
 import { decryptCredentialIdentifier, encryptCredentialIdentifier } from "./lawyer-credential-crypto";
 import { PrivateDocumentStorage } from "./private-document-storage";
 
@@ -31,60 +32,107 @@ export class LawyerVerificationService {
     return this.prisma.$transaction(async (tx) => {
       await this.lockSession(tx, actorId, sessionId);
       const membership = await this.requireLawyerMembership(tx, workspaceId, actorId, false);
+      await this.expireOverdue(tx, { membershipId: membership.id });
       const submissions = await tx.lawyerCredentialSubmission.findMany({
         where: { membershipId: membership.id, workspaceId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        select: { id: true, cardHolderName: true, jurisdiction: true, cardIdentifierLast4: true, status: true,
-          reviewReason: true, reviewedAt: true, createdAt: true, documents: { select: { id: true, mediaType: true, sizeBytes: true, createdAt: true } } },
+        select: { id: true, cardHolderName: true, professionalRegulator: true, jurisdiction: true, cardIdentifierLast4: true, status: true,
+          reviewReason: true, reviewedAt: true, expiresAt: true, createdAt: true, documents: { select: { id: true, mediaType: true, sizeBytes: true, createdAt: true } } },
       });
       return { currentStatus: submissions[0]?.status ?? "NOT_SUBMITTED", submissions };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   }
 
+  async documentPolicy(workspaceId: string, actorId: string, sessionId: string, jurisdiction: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockSession(tx, actorId, sessionId);
+      await this.requireLawyerMembership(tx, workspaceId, actorId, false);
+      return { required: lawyerCredentialDocumentRequiredFor(this.environment.lawyerCredentialDocumentPolicy, jurisdiction) };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }
+
   async submit(workspaceId: string, actorId: string, sessionId: string, requestId: string,
-    input: CredentialSubmissionInput, file: ValidCredentialFile, bytes: Buffer) {
+    input: CredentialSubmissionInput, file: ValidCredentialFile | undefined, bytes: Buffer | undefined) {
+    const documentRequired = lawyerCredentialDocumentRequiredFor(this.environment.lawyerCredentialDocumentPolicy, input.jurisdiction);
+    if (documentRequired && (!file || !bytes)) throw new BadRequestException("A supporting credential document is required for this jurisdiction.");
     const cardIdentifierCiphertext = encryptCredentialIdentifier(input.cardIdentifier, this.environment.lawyerCredentialEncryptionKey);
-    await this.storage.put(file.storageKey, bytes);
+    const storageKey = file ? scopeCredentialStorageKey(workspaceId, file.storageKey) : undefined;
+    if (storageKey && bytes) await this.storage.put(storageKey, bytes);
     try {
       return await this.prisma.$transaction(async (tx) => {
         await this.lockSession(tx, actorId, sessionId);
         const membership = await this.requireLawyerMembership(tx, workspaceId, actorId, true);
+        await this.expireOverdue(tx, { membershipId: membership.id });
         const latest = await tx.lawyerCredentialSubmission.findFirst({ where: { membershipId: membership.id },
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { status: true } });
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true, status: true } });
         if (latest?.status === LawyerCredentialSubmissionStatus.PENDING) throw new ConflictException("A credential submission is already pending review.");
         if (latest?.status === LawyerCredentialSubmissionStatus.APPROVED) throw new ConflictException("This lawyer profile is already approved.");
 
-        const submission = await tx.lawyerCredentialSubmission.create({ data: {
-          workspaceId, membershipId: membership.id, cardHolderName: input.cardHolderName, jurisdiction: input.jurisdiction,
-          cardIdentifierCiphertext, cardIdentifierLast4: input.cardIdentifier.slice(-4),
-        }, select: { id: true, status: true, createdAt: true, cardIdentifierLast4: true } });
-        await tx.lawyerCredentialDocument.create({ data: {
-          submissionId: submission.id, workspaceId, membershipId: membership.id, storageKey: file.storageKey,
+        const submission = latest?.status === LawyerCredentialSubmissionStatus.DRAFT
+          ? await tx.lawyerCredentialSubmission.update({ where: { id: latest.id }, data: {
+            status: LawyerCredentialSubmissionStatus.PENDING, cardHolderName: input.cardHolderName, jurisdiction: input.jurisdiction,
+            professionalRegulator: input.professionalRegulator, cardIdentifierCiphertext, cardIdentifierLast4: input.cardIdentifier.slice(-4),
+          }, select: { id: true, status: true, createdAt: true, cardIdentifierLast4: true } })
+          : await tx.lawyerCredentialSubmission.create({ data: {
+            workspaceId, membershipId: membership.id, cardHolderName: input.cardHolderName, jurisdiction: input.jurisdiction,
+            professionalRegulator: input.professionalRegulator, cardIdentifierCiphertext, cardIdentifierLast4: input.cardIdentifier.slice(-4),
+          }, select: { id: true, status: true, createdAt: true, cardIdentifierLast4: true } });
+        if (file && storageKey) await tx.lawyerCredentialDocument.create({ data: {
+          submissionId: submission.id, workspaceId, membershipId: membership.id, storageKey,
           mediaType: file.mediaType, sizeBytes: file.sizeBytes, sha256: file.sha256,
         } });
         await tx.securityAuditEvent.create({ data: {
           actorUserId: actorId, workspaceId, eventType: "LAWYER_CREDENTIAL_SUBMITTED", targetType: "LawyerCredentialSubmission",
           targetId: submission.id, requestId: createRequestId(requestId), metadata: { status: submission.status, jurisdiction: input.jurisdiction },
         } });
-        await tx.securityAuditEvent.create({ data: {
+        if (file) await tx.securityAuditEvent.create({ data: {
           actorUserId: actorId, workspaceId, eventType: "LAWYER_CREDENTIAL_DOCUMENT_UPLOADED", targetType: "LawyerCredentialSubmission",
           targetId: submission.id, requestId: createRequestId(requestId), metadata: { mediaType: file.mediaType, sizeBytes: file.sizeBytes },
         } });
         return submission;
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
-      await this.storage.remove(file.storageKey);
+      if (storageKey) await this.storage.remove(storageKey);
       if (isUniqueConflict(error)) throw new ConflictException("A credential submission conflicts with the current profile state.");
       throw error;
     }
   }
 
-  async pending(actorId: string, sessionId: string, page: number, pageSize: number) {
+  async saveDraft(workspaceId: string, actorId: string, sessionId: string, requestId: string,
+    input: Partial<CredentialSubmissionInput>) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockSession(tx, actorId, sessionId);
+      const membership = await this.requireLawyerMembership(tx, workspaceId, actorId, true);
+      await this.expireOverdue(tx, { membershipId: membership.id });
+      const latest = await tx.lawyerCredentialSubmission.findFirst({ where: { membershipId: membership.id },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true, status: true } });
+      if (latest?.status === LawyerCredentialSubmissionStatus.PENDING || latest?.status === LawyerCredentialSubmissionStatus.APPROVED) {
+        throw new ConflictException("A pending or approved credential submission cannot be edited.");
+      }
+      const cardIdentifier = input.cardIdentifier ?? "";
+      const fields = { cardHolderName: input.cardHolderName ?? "", professionalRegulator: input.professionalRegulator ?? "",
+        jurisdiction: input.jurisdiction ?? "", cardIdentifierCiphertext: encryptCredentialIdentifier(cardIdentifier, this.environment.lawyerCredentialEncryptionKey),
+        cardIdentifierLast4: cardIdentifier.slice(-4).padStart(4, " ") };
+      const draft = latest?.status === LawyerCredentialSubmissionStatus.DRAFT
+        ? await tx.lawyerCredentialSubmission.update({ where: { id: latest.id }, data: fields,
+          select: { id: true, status: true, createdAt: true } })
+        : await tx.lawyerCredentialSubmission.create({ data: { workspaceId, membershipId: membership.id,
+          ...fields, status: LawyerCredentialSubmissionStatus.DRAFT }, select: { id: true, status: true, createdAt: true } });
+      await tx.securityAuditEvent.create({ data: { actorUserId: actorId, workspaceId, eventType: "LAWYER_CREDENTIAL_DRAFT_SAVED",
+        targetType: "LawyerCredentialSubmission", targetId: draft.id, requestId: createRequestId(requestId),
+        metadata: { status: draft.status, fieldCount: Object.keys(input).length } } });
+      return draft;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  async pending(actorId: string, sessionId: string, page: number, pageSize: number, status: "PENDING" | "ALL" = "PENDING") {
     return this.prisma.$transaction(async (tx) => {
       await this.requirePlatformAdmin(tx, actorId, sessionId);
-      const where = { status: LawyerCredentialSubmissionStatus.PENDING };
+      await this.expireOverdue(tx);
+      const where = status === "ALL" ? { status: { not: LawyerCredentialSubmissionStatus.DRAFT } } : { status: LawyerCredentialSubmissionStatus.PENDING };
       const total = await tx.lawyerCredentialSubmission.count({ where });
       const submissions = await tx.lawyerCredentialSubmission.findMany({ where, orderBy: { createdAt: "asc" }, skip: (page - 1) * pageSize, take: pageSize,
-          select: { id: true, workspaceId: true, cardHolderName: true, jurisdiction: true, cardIdentifierLast4: true,
+          select: { id: true, workspaceId: true, cardHolderName: true, professionalRegulator: true, jurisdiction: true, cardIdentifierLast4: true,
+            status: true, reviewReason: true, reviewedAt: true, expiresAt: true,
             createdAt: true, membership: { select: { user: { select: { id: true, fullName: true, email: true } }, workspace: { select: { id: true, name: true, kind: true } } }, },
             documents: { select: { id: true, mediaType: true, sizeBytes: true } } },
         });
@@ -96,30 +144,38 @@ export class LawyerVerificationService {
     return this.prisma.$transaction(async (tx) => {
       await this.requirePlatformAdmin(tx, actorId, sessionId);
       const submission = await tx.lawyerCredentialSubmission.findUnique({ where: { id: submissionId }, select: {
-        id: true, workspaceId: true, membershipId: true, cardHolderName: true, jurisdiction: true,
-        cardIdentifierCiphertext: true, cardIdentifierLast4: true, status: true, reviewReason: true, reviewedAt: true, createdAt: true,
+        id: true, workspaceId: true, membershipId: true, cardHolderName: true, professionalRegulator: true, jurisdiction: true,
+        cardIdentifierCiphertext: true, cardIdentifierLast4: true, status: true, reviewReason: true, reviewedAt: true, expiresAt: true, createdAt: true,
         membership: { select: { user: { select: { id: true, fullName: true, email: true } }, workspace: { select: { id: true, name: true, kind: true } } } },
         documents: { select: { id: true, mediaType: true, sizeBytes: true, createdAt: true } },
       } });
       if (!submission) throw new NotFoundException("Credential submission not found.");
-      const { cardIdentifierCiphertext, ...safeSubmission } = submission;
+      if (submission.status === LawyerCredentialSubmissionStatus.DRAFT) throw new NotFoundException("Credential submission not found.");
+      await this.expireOverdue(tx, { id: submissionId });
+      const refreshedSubmission = submission.status === LawyerCredentialSubmissionStatus.APPROVED && submission.expiresAt && submission.expiresAt <= new Date()
+        ? { ...submission, status: LawyerCredentialSubmissionStatus.EXPIRED } : submission;
+      const { cardIdentifierCiphertext, ...safeSubmission } = refreshedSubmission;
       return { ...safeSubmission, cardIdentifier: decryptCredentialIdentifier(cardIdentifierCiphertext, this.environment.lawyerCredentialEncryptionKey) };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   }
 
   async review(submissionId: string, actorId: string, sessionId: string, requestId: string,
-    decision: "APPROVED" | "REJECTED", reason: string | null) {
+    decision: "APPROVED" | "CHANGES_REQUESTED" | "REJECTED", reason: string | null) {
     try {
       return await this.prisma.$transaction(async (tx) => {
         await this.requirePlatformAdmin(tx, actorId, sessionId);
         await tx.$queryRaw`SELECT id FROM lawyer_credential_submissions WHERE id = ${submissionId}::uuid FOR UPDATE`;
         const submission = await tx.lawyerCredentialSubmission.findUnique({ where: { id: submissionId },
-          select: { id: true, workspaceId: true, membershipId: true, status: true } });
+          select: { id: true, workspaceId: true, membershipId: true, status: true,
+            membership: { select: { userId: true } } } });
         if (!submission) throw new NotFoundException("Credential submission not found.");
+        if (submission.membership.userId === actorId) throw new ForbiddenException("You cannot review your own credential submission.");
         if (submission.status !== LawyerCredentialSubmissionStatus.PENDING) throw new ConflictException("This submission has already been reviewed.");
         const reviewedAt = new Date();
         const changed = await tx.lawyerCredentialSubmission.updateMany({ where: { id: submissionId, status: "PENDING" },
-          data: { status: decision, reviewReason: decision === "REJECTED" ? reason : null, reviewedById: actorId, reviewedAt } });
+          data: { status: decision, reviewReason: decision === "APPROVED" ? null : reason, reviewedById: actorId, reviewedAt,
+            expiresAt: decision === "APPROVED" && this.environment.lawyerCredentialValidityDays
+              ? new Date(reviewedAt.getTime() + this.environment.lawyerCredentialValidityDays * 86_400_000) : null } });
         if (changed.count !== 1) throw new ConflictException("This submission changed during review.");
         await tx.securityAuditEvent.create({ data: {
           actorUserId: actorId, workspaceId: submission.workspaceId, eventType: "LAWYER_CREDENTIAL_REVIEWED",
@@ -184,6 +240,20 @@ export class LawyerVerificationService {
       WHERE s.id = ${sessionId}::uuid AND s.user_id = ${actorId}::uuid AND s.revoked_at IS NULL
         AND s.expires_at > NOW() AND u.status = 'ACTIVE' FOR SHARE OF s, u`;
     if (sessions.length !== 1) throw new UnauthorizedException("Authentication required.");
+  }
+
+  private async expireOverdue(tx: Tx, scope: { id?: string; membershipId?: string } = {}) {
+    const now = new Date();
+    const overdue = await tx.lawyerCredentialSubmission.findMany({ where: {
+      ...scope, status: LawyerCredentialSubmissionStatus.APPROVED, expiresAt: { lte: now },
+    }, take: 500, select: { id: true, workspaceId: true } });
+    for (const item of overdue) {
+      const changed = await tx.lawyerCredentialSubmission.updateMany({ where: { id: item.id,
+        status: LawyerCredentialSubmissionStatus.APPROVED, expiresAt: { lte: now } }, data: { status: LawyerCredentialSubmissionStatus.EXPIRED } });
+      if (changed.count === 1) await tx.securityAuditEvent.create({ data: { actorUserId: null, workspaceId: item.workspaceId,
+        eventType: "LAWYER_CREDENTIAL_EXPIRED", targetType: "LawyerCredentialSubmission", targetId: item.id,
+        requestId: createRequestId(undefined), metadata: { fromStatus: "APPROVED", toStatus: "EXPIRED", reason: "VALIDITY_PERIOD_ELAPSED" } } });
+    }
   }
 
   private download(bytes: Buffer, id: string, mediaType: string) {

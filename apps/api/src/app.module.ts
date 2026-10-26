@@ -6,9 +6,10 @@ import { MembershipsModule } from "./memberships/memberships.module";
 import { IndividualPracticeModule } from "./workspaces/individual-practice.module";
 import { PlatformAdminModule } from "./platform-admin/platform-admin.module";
 import { LawyerVerificationModule } from "./lawyer-verification/lawyer-verification.module";
+import { FirmVerificationModule } from "./firm-verification/firm-verification.module";
 
 @Module({
-  imports: [PrismaModule, AuthModule, MembershipsModule, IndividualPracticeModule, PlatformAdminModule, LawyerVerificationModule],
+  imports: [PrismaModule, AuthModule, MembershipsModule, IndividualPracticeModule, PlatformAdminModule, LawyerVerificationModule, FirmVerificationModule],
   controllers: [HealthController],
   providers: [],
 })

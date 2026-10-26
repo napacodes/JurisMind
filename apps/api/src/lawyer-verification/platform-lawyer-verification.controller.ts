@@ -19,11 +19,13 @@ export class PlatformLawyerVerificationController {
   @Get()
   pending(@Query() query: Record<string, unknown>, @Req() request: AuthorizationRequest,
     @Res({ passthrough: true }) response: Response) {
-    if (Object.keys(query).some((key) => key !== "page" && key !== "pageSize")) throw new BadRequestException("Invalid pagination.");
+    if (Object.keys(query).some((key) => key !== "page" && key !== "pageSize" && key !== "status")) throw new BadRequestException("Invalid pagination.");
+    const status = query.status === undefined || query.status === "PENDING" ? "PENDING" : query.status === "ALL" ? "ALL" : null;
+    if (!status) throw new BadRequestException("Invalid credential status filter.");
     const page = parsePositiveInt(query.page, 1, 10_000);
     const pageSize = parsePositiveInt(query.pageSize, 25, 100);
     response.setHeader("Cache-Control", "no-store");
-    return this.verifications.pending(request.authorizationContext!.user.id, request.authenticatedSessionId!, page, pageSize);
+    return this.verifications.pending(request.authorizationContext!.user.id, request.authenticatedSessionId!, page, pageSize, status);
   }
 
   @Get(":submissionId")

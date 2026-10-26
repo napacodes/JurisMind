@@ -56,6 +56,7 @@ test('platform navigation links only to implemented routes and names unsupported
   assert.deepEqual(links, [
     '/administration',
     '/administration/users',
+    '/administration/firm-verifications',
     '/administration/lawyer-verifications',
     '/administration/content',
   ])
