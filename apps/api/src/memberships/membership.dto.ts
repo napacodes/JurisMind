@@ -21,11 +21,28 @@ export function parseIdentifier(value: string): string {
   return uuid(value);
 }
 
-export function parseAddMembership(value: unknown): { userId: string; role: MembershipRole } {
+export function parseAddMembership(value: unknown): { userId?: string; email?: string; role: MembershipRole; supervisorMembershipId?: string } {
   const body = object(value);
-  exactKeys(body, ["userId", "role"]);
+  exactKeys(body, ["userId", "email", "role", "supervisorMembershipId"]);
   if (!Object.values(MembershipRole).includes(body.role as MembershipRole)) throw new BadRequestException("Invalid practice role.");
-  return { userId: uuid(body.userId), role: body.role as MembershipRole };
+  const hasUserId = body.userId !== undefined;
+  const hasEmail = body.email !== undefined;
+  if (hasUserId === hasEmail) throw new BadRequestException("Supply exactly one eligible account identifier.");
+  if (hasUserId && typeof body.userId !== "string") throw new BadRequestException("A valid account identifier is required.");
+  if (hasEmail && typeof body.email !== "string") throw new BadRequestException("Enter a valid email address.");
+  let email: string | undefined;
+  if (hasEmail) {
+    email = (body.email as string).trim().toLowerCase();
+    if (email.length > 320 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BadRequestException("Enter a valid email address.");
+  }
+  const supervisorMembershipId = body.supervisorMembershipId === undefined ? undefined : uuid(body.supervisorMembershipId);
+  if (body.role !== MembershipRole.ASSISTANT && supervisorMembershipId) throw new BadRequestException("Only assistant invitations accept a supervisor.");
+  return {
+    ...(hasUserId ? { userId: uuid(body.userId) } : {}),
+    ...(email ? { email } : {}),
+    role: body.role as MembershipRole,
+    ...(supervisorMembershipId ? { supervisorMembershipId } : {}),
+  };
 }
 
 export function parseInvitationAcceptance(value: unknown): string {

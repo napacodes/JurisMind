@@ -56,6 +56,24 @@ async function verifyTestConnections() {
   }
 }
 
+async function verifyDevelopmentConnection() {
+  const url = parseLocalPostgresUrl(process.env.DATABASE_URL || "");
+  if (url.pathname !== "/jurismind_dev") {
+    throw new Error("The browser API connection must target jurismind_dev.");
+  }
+  const client = new Client({ connectionString: url.toString() });
+  try {
+    await client.connect();
+    const result = await client.query("SELECT current_database() AS name");
+    if (result.rows[0]?.name !== "jurismind_dev") {
+      throw new Error("Database identity verification failed.");
+    }
+    process.stdout.write("jurismind_dev");
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
 function runSelfTest() {
   const validCases = [
     "postgresql://synthetic:synthetic@localhost:5432/jurismind_dev?schema=public",
@@ -87,6 +105,9 @@ async function main() {
     case "verify":
       await verifyTestConnections();
       break;
+    case "verify-dev":
+      await verifyDevelopmentConnection();
+      break;
     case "random-base64url":
       process.stdout.write(randomBytes(32).toString("base64url"));
       break;
@@ -97,7 +118,7 @@ async function main() {
       runSelfTest();
       break;
     default:
-      throw new Error("Specify derive, verify, random-base64url, random-base64, or --self-test.");
+      throw new Error("Specify derive, verify, verify-dev, random-base64url, random-base64, or --self-test.");
   }
 }
 

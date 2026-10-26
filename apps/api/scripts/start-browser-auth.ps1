@@ -26,8 +26,8 @@ function Read-LocalKey([string[]]$lines, [string]$name) {
 
 Push-Location $apiRoot
 try {
-  $testUrl = & node -r dotenv/config $databaseHelper derive
-  if ($LASTEXITCODE -ne 0 -or -not $testUrl) { throw 'Could not safely derive the isolated local test target from the existing API configuration.' }
+  $verifiedDatabase = & node -r dotenv/config $databaseHelper verify-dev
+  if ($LASTEXITCODE -ne 0 -or $verifiedDatabase -ne 'jurismind_dev') { throw 'The API configuration must resolve to local jurismind_dev for browser testing.' }
 
   if (-not (Test-Path -LiteralPath $sinkKeyFile)) {
     $newSinkKey = & node $databaseHelper random-base64url
@@ -40,10 +40,6 @@ try {
   if ($line -notmatch '^LOCAL_PASSWORD_RESET_SINK_KEY=([A-Za-z0-9_-]{43})$') { throw 'The ignored local sink-key file has an invalid format.' }
   $sinkKey = $Matches[1]
 
-  $env:DATABASE_URL = $testUrl
-  $env:AUTH_TEST_DATABASE_URL = $testUrl
-  $verifiedDatabase = & node $databaseHelper verify
-  if ($LASTEXITCODE -ne 0 -or $verifiedDatabase -ne 'jurismind_auth_test') { throw 'Both process database connections must resolve to jurismind_auth_test.' }
   $env:NODE_ENV = 'development'
   $env:PORT = '4000'
   $env:TRUSTED_ORIGINS = 'http://localhost:3000'
@@ -52,6 +48,7 @@ try {
   $env:PASSWORD_MIN_LENGTH = '12'
   $env:LOGIN_RATE_LIMIT_MAX = '5'
   $env:LOGIN_RATE_LIMIT_WINDOW_SECONDS = '900'
+  $env:INVITATION_DEV_TOKEN_DELIVERY = 'true'
   # MFA secrets and professional-card identifiers are encrypted at rest, so the keys must
   # outlive one API process: regenerating them on every launch leaves previously stored rows
   # unreadable for the account owner and for reviewers. They are kept in a user-only, ignored
@@ -75,10 +72,10 @@ try {
   $env:PASSWORD_RESET_EMAIL_API_KEY = ''
   $env:PASSWORD_RESET_EMAIL_FROM = ''
 
-  Write-Host 'Starting API against the verified local auth-test database. Encryption and reset-sink keys are read from user-only ignored local files, so restarts keep encrypted records readable.'
+  Write-Host 'Starting API against the verified local jurismind_dev database. Encryption and reset-sink keys are read from user-only ignored local files, so restarts keep encrypted records readable.'
   npm run dev
 }
 finally {
-  Remove-Item Env:DATABASE_URL, Env:AUTH_TEST_DATABASE_URL, Env:MFA_ENCRYPTION_KEY, Env:LAWYER_CREDENTIAL_ENCRYPTION_KEY, Env:LOCAL_PASSWORD_RESET_SINK_KEY -ErrorAction SilentlyContinue
+  Remove-Item Env:INVITATION_DEV_TOKEN_DELIVERY, Env:MFA_ENCRYPTION_KEY, Env:LAWYER_CREDENTIAL_ENCRYPTION_KEY, Env:LOCAL_PASSWORD_RESET_SINK_KEY -ErrorAction SilentlyContinue
   Pop-Location
 }

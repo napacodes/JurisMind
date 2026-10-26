@@ -13,6 +13,7 @@ import { MfaCryptoService } from "./mfa-crypto.service";
 import { MfaService } from "./mfa.service";
 import { PasswordRecoveryService } from "./password-recovery.service";
 import { ConfiguredPasswordResetDelivery, PASSWORD_RESET_DELIVERY } from "./password-reset-delivery";
+import { RegistrationService } from "./registration.service";
 
 @Module({
   imports: [PrismaModule, AuthorizationModule],
@@ -28,6 +29,7 @@ import { ConfiguredPasswordResetDelivery, PASSWORD_RESET_DELIVERY } from "./pass
     MfaService,
     PasswordRecoveryService,
     ConfiguredPasswordResetDelivery,
+    RegistrationService,
     { provide: PASSWORD_RESET_DELIVERY, useExisting: ConfiguredPasswordResetDelivery },
   ],
   exports: [SessionAuthGuard, CsrfOriginGuard, AuthService, PasswordHasherService, AUTH_ENVIRONMENT],

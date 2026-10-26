@@ -30,6 +30,7 @@ test("lawyer credential verification is private, authorized, audited, and concur
     nodeEnv: "test", trustedOrigins: ["http://localhost:3000"], sessionTtlSeconds: 3600,
     passwordMinLength: 12, loginRateLimitMax: 5, loginRateLimitWindowSeconds: 900,
     invitationDevTokenDelivery: false, mfaEncryptionKey: Buffer.alloc(32, 2), lawyerCredentialEncryptionKey: Buffer.alloc(32, 3),
+    lawyerCredentialValidityDays: 1,
     publicWebUrl: "http://localhost:3000", passwordResetEmailEndpoint: "https://mail.example.invalid/send",
     passwordResetEmailApiKey: "integration-only", passwordResetEmailFrom: "noreply@example.invalid",
   };
@@ -61,6 +62,7 @@ test("lawyer credential verification is private, authorized, audited, and concur
   const createSubmission = (who: number, workspaceId: string, cardIdentifier: string) => {
     const body = new FormData();
     body.set("cardHolderName", who === 0 ? "Synthetic Lawyer One" : "Synthetic Lawyer Two");
+    body.set("professionalRegulator", "Synthetic Bar Association");
     body.set("jurisdiction", "Example District");
     body.set("cardIdentifier", cardIdentifier);
     body.set("document", new Blob([Buffer.from("%PDF-1.7\nSynthetic credential test document", "ascii")], { type: "application/pdf" }), "credential.pdf");
@@ -113,16 +115,23 @@ test("lawyer credential verification is private, authorized, audited, and concur
       "a lawyer cannot access another workspace's credential records");
 
     const badFile = new FormData();
-    badFile.set("cardHolderName", "Synthetic Lawyer One"); badFile.set("jurisdiction", "Example District"); badFile.set("cardIdentifier", "BAD-0001");
+    badFile.set("cardHolderName", "Synthetic Lawyer One"); badFile.set("professionalRegulator", "Synthetic Bar Association");
+    badFile.set("jurisdiction", "Example District"); badFile.set("cardIdentifier", "BAD-0001");
     badFile.set("document", new Blob(["not pdf"], { type: "application/pdf" }), "fake.pdf");
     assert.equal((await request(root, "POST", 0, badFile)).status, 400, "MIME type without matching file content is rejected");
     assert.equal(await prisma.lawyerCredentialSubmission.count({ where: { membershipId: { in: membershipIds } } }), 0,
       "invalid file content does not create verification state for this test's memberships");
 
+    const draftResponse = await request(`${root}/draft`, "PUT", 0, { cardHolderName: "Synthetic Draft Lawyer" });
+    assert.equal(draftResponse.status, 200, "incomplete lawyer credential data can be saved as a draft");
+    const draft = await draftResponse.json() as { id: string; status: string };
+    assert.equal(draft.status, "DRAFT");
+
     const submitted = await createSubmission(0, workspaceIds[0]!, "BAR-00001234");
     assert.equal(submitted.status, 201);
     const first = await submitted.json() as { id: string; status: string; cardIdentifierLast4: string };
     assert.equal(first.status, "PENDING", "upload never approves a lawyer automatically");
+    assert.equal(first.id, draft.id, "final submission transitions the saved draft");
     assert.equal(first.cardIdentifierLast4, "1234");
     assert.equal(JSON.stringify(first).includes("BAR-00001234"), false, "submission response does not disclose full card identifier");
     assert.equal((await createSubmission(0, workspaceIds[0]!, "BAR-RETRY-1234")).status, 409,
@@ -151,6 +160,10 @@ test("lawyer credential verification is private, authorized, audited, and concur
     assert.equal((await request(adminQueuePath, "GET", 2)).status, 403, "assistant cannot access the platform review queue");
     assert.equal((await request(`${adminQueuePath}/${first.id}/review`, "POST", 0, { decision: "APPROVED" })).status, 403,
       "a practice lawyer cannot approve or reject credential submissions");
+    const selfGrant = await prisma.platformRoleGrant.create({ data: { userId: lawyerA, role: "SUPER_ADMIN" }, select: { id: true } });
+    assert.equal((await request(`${adminQueuePath}/${first.id}/review`, "POST", 0,
+      { decision: "APPROVED" })).status, 403, "a platform reviewer cannot approve their own lawyer credential");
+    await prisma.platformRoleGrant.delete({ where: { id: selfGrant.id } });
     const queueResponse = await request(adminQueuePath, "GET", 4);
     assert.equal(queueResponse.status, 200);
     const queue = await queueResponse.json() as { submissions: Array<Record<string, unknown>>; pagination: { total: number } };
@@ -203,6 +216,11 @@ test("lawyer credential verification is private, authorized, audited, and concur
     assert.equal(approved.status, 201);
     assert.equal((await approved.json() as { status: string }).status, "APPROVED");
     assert.equal(await prisma.securityAuditEvent.count({ where: { requestId: approveId, eventType: "LAWYER_CREDENTIAL_REVIEWED" } }), 1);
+    await prisma.lawyerCredentialSubmission.update({ where: { id: second.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
+    assert.equal((await (await request(root)).json() as { currentStatus: string }).currentStatus, "EXPIRED",
+      "overdue lawyer approval transitions to expired without affecting the firm workspace");
+    assert.equal(await prisma.securityAuditEvent.count({ where: { targetId: second.id, eventType: "LAWYER_CREDENTIAL_EXPIRED" } }), 1,
+      "lawyer expiry transition is audited");
     assert.equal((await request(`${adminQueuePath}/${second.id}/review`, "POST", 4, { decision: "REJECTED", reason: "Stale decision." })).status, 409,
       "a stale review cannot overwrite an approval");
     assert.equal((await prisma.lawyerCredentialSubmission.findMany({ where: { membershipId: membershipIds[0]! }, orderBy: { createdAt: "asc" } })).length, 2,

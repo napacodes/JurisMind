@@ -1,6 +1,5 @@
-import { LegalResourcePage } from '@/components/legal/LegalResourcePage'
-import { legalResources } from '@/data/legal-demo'
+import WorkspaceMembers from '@/views/pages/staff/workspace-members'
 
 export default function StaffPage() {
-  return <LegalResourcePage resource={legalResources.staff} />
+  return <WorkspaceMembers />
 }

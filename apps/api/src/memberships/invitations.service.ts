@@ -34,7 +34,7 @@ export class InvitationsService {
   ) {}
 
   async create(workspaceId: string, actorId: string, sessionId: string,
-    input: { userId: string; role: MembershipRole }, requestId: string) {
+    input: { userId?: string; email?: string; role: MembershipRole; supervisorMembershipId?: string }, requestId: string) {
     const rawToken = randomBytes(32).toString("base64url");
     const tokenHash = hashInvitationToken(rawToken);
     const expiresAt = new Date(Date.now() + INVITATION_TTL_MS);
@@ -53,10 +53,11 @@ export class InvitationsService {
         throw new ConflictException("Individual-practice workspaces can invite assistants through this workflow only.");
       }
       const recipient = await tx.user.findFirst({
-        where: { id: input.userId, status: "ACTIVE", passwordHash: { not: null } },
+        where: { ...(input.userId ? { id: input.userId } : { emailNormalized: input.email }), status: "ACTIVE", passwordHash: { not: null } },
         select: { id: true, email: true, emailNormalized: true },
       });
       if (!recipient) throw new NotFoundException("Eligible user not found.");
+      if (recipient.id === actorId) throw new ConflictException("You cannot invite yourself.");
 
       const existing = await tx.practiceMembership.findUnique({
         where: { workspaceId_userId: { workspaceId, userId: recipient.id } },
@@ -72,10 +73,21 @@ export class InvitationsService {
             lawyerProfile: { isNot: null } }, select: { id: true },
         });
         if (!actorLawyer) throw new ForbiddenException("An active lawyer profile is required to invite an assistant.");
+        if (input.supervisorMembershipId && input.supervisorMembershipId !== actorLawyer.id) {
+          throw new ForbiddenException("Lawyers may invite assistants only under their own supervision.");
+        }
         if (existing?.supervisingLawyerMembershipId && existing.supervisingLawyerMembershipId !== actorLawyer.id) {
           throw new ForbiddenException("Lawyers may invite only assistants they supervise.");
         }
         invitedSupervisorId = actorLawyer.id;
+      } else if (input.role === MembershipRole.ASSISTANT) {
+        invitedSupervisorId = input.supervisorMembershipId ?? existing?.supervisingLawyerMembershipId ?? undefined;
+        if (!invitedSupervisorId) throw new ConflictException("Select an active supervising lawyer for the assistant invitation.");
+        const supervisor = await tx.practiceMembership.findFirst({
+          where: { id: invitedSupervisorId, workspaceId, role: MembershipRole.LAWYER, status: MembershipStatus.ACTIVE,
+            lawyerProfile: { isNot: null } }, select: { id: true },
+        });
+        if (!supervisor) throw new ConflictException("Assistant invitations require an active lawyer in this workspace.");
       }
       if (existing?.role === MembershipRole.LAWYER && workspace.kind === WorkspaceKind.INDIVIDUAL) {
         throw new ConflictException("The primary lawyer is provisioned through workspace onboarding.");
@@ -94,7 +106,7 @@ export class InvitationsService {
       }
       const membership = existing
         ? await tx.practiceMembership.update({ where: { id: existing.id },
-          data: { role: input.role, ...(invitedSupervisorId ? { supervisingLawyerMembershipId: invitedSupervisorId } : {}) },
+          data: { role: input.role, supervisingLawyerMembershipId: invitedSupervisorId ?? null },
           select: { id: true } })
         : await tx.practiceMembership.create({
           data: { workspaceId, userId: recipient.id, role: input.role, status: MembershipStatus.INVITED,

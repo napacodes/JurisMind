@@ -7,7 +7,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { AlertCircle, LoaderCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAuth } from './AuthProvider'
-import { allowedWorkspaceNavigation, safeReturnTo } from '@/lib/api'
+import { allowedWorkspaceNavigation, resolveWorkspaceSelection, safeReturnTo } from '@/lib/api'
 
 export function AuthGate({ children, requireWorkspace = false, requirePlatformAdmin = false }: { children: ReactNode; requireWorkspace?: boolean; requirePlatformAdmin?: boolean }) {
   const { state, user, workspaces, refresh } = useAuth()
@@ -19,6 +19,8 @@ export function AuthGate({ children, requireWorkspace = false, requirePlatformAd
   const router = useRouter()
   const pathname = usePathname()
   const search = useSearchParams().toString()
+  const requestedId = new URLSearchParams(search).get('workspaceId')
+  const workspaceSelection = resolveWorkspaceSelection(workspaces, requestedId)
 
   useEffect(() => {
     if (!hydrated) return
@@ -27,8 +29,10 @@ export function AuthGate({ children, requireWorkspace = false, requirePlatformAd
       router.replace(`/pages/auth/login?returnTo=${encodeURIComponent(returnTo)}`)
     } else if (state === 'authenticated' && requireWorkspace && workspaces.length === 0) {
       router.replace('/workspaces')
+    } else if (state === 'authenticated' && requireWorkspace && workspaceSelection.invalidRequest) {
+      router.replace('/workspaces')
     }
-  }, [hydrated, state, requireWorkspace, workspaces.length, pathname, search, router])
+  }, [hydrated, state, requireWorkspace, workspaces.length, workspaceSelection.invalidRequest, pathname, search, router])
 
   // Keep the first client render identical to server HTML even if AuthProvider's
   // bootstrap request finishes before a Suspense boundary hydrates this gate.
@@ -39,10 +43,10 @@ export function AuthGate({ children, requireWorkspace = false, requirePlatformAd
     return <StatusPage title='Platform administration is restricted' detail='This area is available only to users with an active Super Admin grant. Practice roles do not provide platform-wide access.' action={<Button nativeButton={false} render={<Link href='/workspaces' />}>Return to workspaces</Button>} />
   }
   if (requireWorkspace && workspaces.length === 0) return <LoadingState label='Opening workspace setup…' />
+  if (requireWorkspace && workspaceSelection.invalidRequest) return <LoadingState label='Opening your workspace list…' />
 
   if (requireWorkspace) {
-    const requestedId = new URLSearchParams(search).get('workspaceId')
-    const selected = workspaces.find((workspace) => workspace.id === requestedId) ?? workspaces[0]
+    const selected = workspaceSelection.workspace
     const supported = allowedWorkspaceNavigation(selected?.permissions ?? [])
     if (!supported.some((route) => pathname === route || pathname.startsWith(`${route}/`))) {
       return <StatusPage title='This workspace view is not available' detail='Your membership does not include a supported view for this route. Workspace membership alone does not grant access to matters or confidential records.' action={<Button nativeButton={false} render={<Link href='/dashboard' />}>Open workspace overview</Button>} />

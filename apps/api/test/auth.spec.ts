@@ -390,6 +390,32 @@ test("login throttling returns a generic failure and records a throttle audit ev
   assert.equal(database.auditEvents.filter((event) => event.eventType === "AUTH_LOGIN_THROTTLED").length, 1);
 });
 
+test("registration throttling uses independent identifier and IP buckets from sign-in", () => {
+  const limiter = new LoginRateLimiterService(environment);
+  const startedAt = 100_000;
+  limiter.recordFailure(email, "127.0.0.1", startedAt);
+  limiter.recordFailure(email, "127.0.0.1", startedAt);
+  assert.equal(limiter.isBlocked(email, "127.0.0.1", startedAt), true);
+  assert.equal(limiter.isRegistrationBlocked("new-account@example.invalid", "127.0.0.1", startedAt), false,
+    "failed sign-ins cannot block a new account registration from the same IP");
+
+  limiter.recordRegistrationFailure("new-account@example.invalid", "127.0.0.1", startedAt);
+  limiter.recordRegistrationFailure("new-account@example.invalid", "127.0.0.1", startedAt);
+  assert.equal(limiter.isRegistrationBlocked("new-account@example.invalid", "127.0.0.1", startedAt), true,
+    "registration retains its own per-identifier and per-IP throttling");
+  assert.equal(limiter.isBlocked("other-user@example.invalid", "127.0.0.1", startedAt), true,
+    "sign-in throttling remains intact and separately enforced");
+
+  limiter.clearRegistrationIdentifier("new-account@example.invalid");
+  assert.equal(limiter.isRegistrationBlocked("new-account@example.invalid", "127.0.0.2", startedAt), false,
+    "successful registration clears its identifier bucket");
+  const resetAt = startedAt + environment.loginRateLimitWindowSeconds * 1000;
+  assert.equal(limiter.isRegistrationBlocked("new-account@example.invalid", "127.0.0.1", resetAt), false,
+    "registration IP bucket stops blocking at the configured window boundary");
+  assert.equal(limiter.isBlocked(email, "127.0.0.1", resetAt), false,
+    "sign-in buckets also stop blocking at the configured window boundary");
+});
+
 test("login ignores no user-controlled privilege fields and only returns identity", async () => {
   const response = await request("/api/auth/login", {
     method: "POST",

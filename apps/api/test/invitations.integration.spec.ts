@@ -83,9 +83,11 @@ test("invitation lifecycle is identity-bound, single-use, audited, and transacti
       invitationDevTokenDelivery: true,
     }, new UnconfiguredInvitationDelivery());
     const membershipService = new MembershipsService(prisma as unknown as PrismaService, contexts, authorization);
-    const create = (workspace: string, actor: string, recipient: string, role: "LAWYER" | "ASSISTANT", request = randomUUID()) => {
+    const create = (workspace: string, actor: string, recipient: string, role: "LAWYER" | "ASSISTANT",
+      request = randomUUID(), supervisorMembershipId?: string) => {
       requestIds.push(request);
-      return service.create(workspace, actor, sessionIds[actor]!, { userId: recipient, role }, request);
+      return service.create(workspace, actor, sessionIds[actor]!, { userId: recipient, role,
+        ...(supervisorMembershipId ? { supervisorMembershipId } : {}) }, request);
     };
     const accept = (token: string, actor: string, request = randomUUID()) => {
       requestIds.push(request);
@@ -149,8 +151,12 @@ test("invitation lifecycle is identity-bound, single-use, audited, and transacti
       targetId: created.invitationId, eventType: "WORKSPACE_INVITATION_ACCEPTED",
     } }), 1, "acceptance replay does not duplicate the success audit");
 
-    const replacement = await create(workspaceId, ids.admin, ids.assistant, "ASSISTANT");
+    const replacement = await create(workspaceId, ids.admin, ids.assistant, "ASSISTANT", randomUUID(), membershipIds.lawyer);
     const assistantInvitation = await prisma.workspaceInvitation.findUniqueOrThrow({ where: { id: replacement.invitationId } });
+    assert.equal((await prisma.practiceMembership.findUniqueOrThrow({ where: { id: membershipIds.assistant } }))
+      .supervisingLawyerMembershipId, membershipIds.lawyer,
+    "assistant invitation persists its active same-workspace supervising lawyer");
+    await prisma.practiceMembership.update({ where: { id: membershipIds.assistant }, data: { supervisingLawyerMembershipId: null } });
     await assert.rejects(accept(replacement.developmentToken!, ids.assistant), GoneException,
       "assistant invitation cannot activate before a valid supervisor is assigned");
     assert.equal((await prisma.practiceMembership.findUniqueOrThrow({ where: { id: membershipIds.assistant } })).status, "INVITED");
@@ -175,12 +181,18 @@ test("invitation lifecycle is identity-bound, single-use, audited, and transacti
     const revokedMembership = await prisma.practiceMembership.findUniqueOrThrow({
       where: { workspaceId_userId: { workspaceId, userId: ids.other } },
     });
-    await prisma.practiceMembership.update({ where: { id: revokedMembership.id }, data: { role: "ASSISTANT" } });
+    await prisma.practiceMembership.update({ where: { id: revokedMembership.id }, data: {
+      role: "ASSISTANT", supervisingLawyerMembershipId: membershipIds.lawyer,
+    } });
     await assert.rejects(accept(revoked.developmentToken!, ids.other), GoneException,
       "changing the membership role cannot change the role frozen in an invitation");
-    await prisma.practiceMembership.update({ where: { id: revokedMembership.id }, data: { role: "LAWYER" } });
-    await service.revoke(workspaceId, revoked.invitationId, ids.admin, sessionIds[ids.admin]!, randomUUID());
+    const roleReplacement = await create(workspaceId, ids.admin, ids.other, "LAWYER");
+    const roleReplacedMembership = await prisma.practiceMembership.findUniqueOrThrow({ where: { id: revokedMembership.id } });
+    assert.equal(roleReplacedMembership.role, "LAWYER");
+    assert.equal(roleReplacedMembership.supervisingLawyerMembershipId, null,
+      "replacing an assistant invitation with a lawyer invitation clears its assistant-only supervisor relation");
     await assert.rejects(accept(revoked.developmentToken!, ids.other), GoneException);
+    await service.revoke(workspaceId, roleReplacement.invitationId, ids.admin, sessionIds[ids.admin]!, randomUUID());
 
     await assert.rejects(create(workspaceId, ids.admin, ids.lawyer, "LAWYER"), ConflictException,
       "active existing members cannot be invited again");

@@ -10,37 +10,69 @@ interface Bucket {
 @Injectable()
 export class LoginRateLimiterService {
   private readonly attempts = new Map<string, Bucket>();
+  private readonly registrationAttempts = new Map<string, Bucket>();
 
   constructor(@Inject(AUTH_ENVIRONMENT) private readonly environment: AuthEnvironment) {}
 
   isBlocked(identifier: string, remoteAddress: string, now = Date.now()): boolean {
     this.pruneExpired(now);
-    return this.keysFor(identifier, remoteAddress).some(
-      (key) => (this.attempts.get(key)?.count ?? 0) >= this.environment.loginRateLimitMax,
-    );
+    return this.isBlockedIn(this.attempts, this.keysFor(identifier, remoteAddress), now);
   }
 
   recordFailure(identifier: string, remoteAddress: string, now = Date.now()): void {
+    this.recordFailureIn(this.attempts, this.keysFor(identifier, remoteAddress), now);
+  }
+
+  isRegistrationBlocked(identifier: string, remoteAddress: string, now = Date.now()): boolean {
+    this.pruneExpired(now);
+    return this.isBlockedIn(this.registrationAttempts, this.keysFor(identifier, remoteAddress), now);
+  }
+
+  recordRegistrationFailure(identifier: string, remoteAddress: string, now = Date.now()): void {
+    this.recordFailureIn(this.registrationAttempts, this.keysFor(identifier, remoteAddress), now);
+  }
+
+  clearRegistrationIdentifier(identifier: string): void {
+    const identifierKey = createHash("sha256").update(identifier).digest("hex");
+    this.registrationAttempts.delete(`email:${identifierKey}`);
+  }
+
+  private isBlockedIn(attempts: Map<string, Bucket>, keys: string[], now: number): boolean {
+    let blocked = false;
+    for (const key of keys) {
+      const bucket = attempts.get(key);
+      if (!bucket) continue;
+      if (bucket.resetAt <= now) attempts.delete(key);
+      else if (bucket.count >= this.environment.loginRateLimitMax) blocked = true;
+    }
+    return blocked;
+  }
+
+  private recordFailureIn(attempts: Map<string, Bucket>, keys: string[], now: number): void {
     this.pruneExpired(now);
     const resetAt = now + this.environment.loginRateLimitWindowSeconds * 1000;
-    for (const key of this.keysFor(identifier, remoteAddress)) {
-      const bucket = this.attempts.get(key);
-      if (!bucket || bucket.resetAt <= now) this.attempts.set(key, { count: 1, resetAt });
+    for (const key of keys) {
+      const bucket = attempts.get(key);
+      if (!bucket || bucket.resetAt <= now) attempts.set(key, { count: 1, resetAt });
       else bucket.count += 1;
     }
-    if (this.attempts.size > 20_000) {
+    if (this.attempts.size + this.registrationAttempts.size > 20_000) {
       this.pruneExpired(now, true);
-      while (this.attempts.size > 20_000) {
+      while (this.attempts.size + this.registrationAttempts.size > 20_000) {
         let oldestKey: string | undefined;
+        let oldestMap: Map<string, Bucket> | undefined;
         let oldestResetAt = Number.POSITIVE_INFINITY;
-        for (const [key, bucket] of this.attempts) {
-          if (bucket.resetAt < oldestResetAt) {
-            oldestKey = key;
-            oldestResetAt = bucket.resetAt;
+        for (const map of [this.attempts, this.registrationAttempts]) {
+          for (const [key, bucket] of map) {
+            if (bucket.resetAt < oldestResetAt) {
+              oldestKey = key;
+              oldestMap = map;
+              oldestResetAt = bucket.resetAt;
+            }
           }
         }
         if (!oldestKey) break;
-        this.attempts.delete(oldestKey);
+        oldestMap!.delete(oldestKey);
       }
     }
   }
@@ -56,9 +88,11 @@ export class LoginRateLimiterService {
   }
 
   private pruneExpired(now: number, force = false): void {
-    if (!force && this.attempts.size < 5_000) return;
-    for (const [key, bucket] of this.attempts) {
-      if (bucket.resetAt <= now) this.attempts.delete(key);
+    if (!force && this.attempts.size + this.registrationAttempts.size < 5_000) return;
+    for (const map of [this.attempts, this.registrationAttempts]) {
+      for (const [key, bucket] of map) {
+        if (bucket.resetAt <= now) map.delete(key);
+      }
     }
   }
 }

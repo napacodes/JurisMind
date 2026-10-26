@@ -49,8 +49,10 @@ import {
 } from '@/components/ui/sidebar'
 
 // Config Imports
-import { navItems } from '@/configs/navConfig'
+import { navItems, navItemsForPermissions } from '@/configs/navConfig'
 import themeConfig from '@/configs/themeConfig'
+import { resolveWorkspaceSelection } from '@/lib/api'
+import { useAuth } from '@/components/auth/AuthProvider'
 
 // Util Imports
 import { cn } from '@/lib/utils'
@@ -445,6 +447,12 @@ const SidebarLayout = () => {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { state, isMobile } = useSidebar()
+  const { workspaces } = useAuth()
+  const selectedWorkspace = resolveWorkspaceSelection(workspaces, searchParams.get('workspaceId')).workspace
+  const visibleNavItems = useMemo(
+    () => navItemsForPermissions(navItems, selectedWorkspace?.permissions ?? []),
+    [selectedWorkspace?.permissions]
+  )
 
   // Branches the user has explicitly opened or closed, keyed by label. It lives here rather
   // than inside each Collapsible so it survives the swap between the inline sub-menu and the
@@ -453,8 +461,8 @@ const SidebarLayout = () => {
   const [openItems, setOpenItems] = useState<Record<string, boolean>>({})
 
   const activeBranchKeys = useMemo(
-    () => getActiveBranchKeys(navItems, pathname, searchParams),
-    [pathname, searchParams]
+    () => getActiveBranchKeys(visibleNavItems, pathname, searchParams),
+    [visibleNavItems, pathname, searchParams]
   )
 
   // A user toggle wins; otherwise the branch mirrors whether it holds the active route.
@@ -491,7 +499,7 @@ const SidebarLayout = () => {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent className='group-data-[collapsible=icon]:overflow-y-auto'>
-        {navItems.map((navItem, index) => {
+        {visibleNavItems.map((navItem, index) => {
           return (
             <SidebarGroupedMenuItems
               key={navItem.groupLabel || index}

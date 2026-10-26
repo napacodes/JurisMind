@@ -21,6 +21,7 @@ export type MenuSubItem = MenuLeafSubItem | MenuGroupSubItem
 export type MenuItem = {
   icon: IconName
   label: string
+  permission?: string
 } & (
   | { href: string; badge?: string; badgeClassName?: string; childItems?: never; target?: '_blank' | '_self' | '_parent' | '_top' }
   | { href?: never; badge?: string; badgeClassName?: string; childItems: MenuSubItem[] }
@@ -33,18 +34,19 @@ export type NavItem = {
 
 export const navItems: NavItem[] = [
   {
-    groupLabel: 'Platform administration',
-    items: [
-      { icon: 'LayoutDashboard', label: 'Dashboard', href: '/administration/users' },
-      { icon: 'UsersRound', label: 'Admin users', href: '/administration/users' },
-      { icon: 'FileText', label: 'Website content', href: '/administration/content' },
-      { icon: 'ShieldCheck', label: 'Credential reviews', href: '/administration/lawyer-verifications' }
-    ]
-  },
-  {
     groupLabel: 'Workspace',
     items: [
-      { icon: 'LayoutDashboard', label: 'Overview', href: '/dashboard' }
+      { icon: 'LayoutDashboard', label: 'Overview', href: '/dashboard', permission: 'workspace:read:metadata' },
+      { icon: 'UsersRound', label: 'Firm team', href: '/staff', permission: 'workspace:read:memberships' },
+      { icon: 'ShieldCheck', label: 'Firm verification', href: '/firm-verification', permission: 'firm-kyc:submit:self' },
+      { icon: 'ShieldCheck', label: 'Credential status', href: '/lawyer-verification', permission: 'lawyer-credential:submit:self' }
     ]
   }
 ]
+
+export function navItemsForPermissions(items: NavItem[], permissions: readonly string[]): NavItem[] {
+  return items.map((group) => ({
+    ...group,
+    items: group.items.filter((item) => !item.permission || permissions.includes(item.permission)),
+  })).filter((group) => group.items.length > 0)
+}

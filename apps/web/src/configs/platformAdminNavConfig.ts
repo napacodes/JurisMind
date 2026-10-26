@@ -46,6 +46,7 @@ export const platformAdminNavSections: PlatformAdminNavSection[] = [
     label: 'KYC Verification',
     icon: ShieldCheck,
     items: [
+      { kind: 'link', label: 'Firm verification', href: '/administration/firm-verifications' },
       { kind: 'link', label: 'Pending reviews', href: '/administration/lawyer-verifications' },
       { kind: 'unavailable', label: 'Verification records' },
       { kind: 'unavailable', label: 'KYC templates' },

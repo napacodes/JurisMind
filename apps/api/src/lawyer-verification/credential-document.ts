@@ -5,6 +5,14 @@ export const MAX_CREDENTIAL_DOCUMENT_BYTES = 10 * 1024 * 1024;
 export type UploadedCredential = { buffer: Buffer; mimetype: string; size: number };
 export type ValidCredentialFile = { storageKey: string; mediaType: string; extension: string; sizeBytes: number; sha256: string };
 
+export function scopeCredentialStorageKey(workspaceId: string, storageKey: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(workspaceId)
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.private$/i.test(storageKey)) {
+    throw new BadRequestException("Invalid private document key.");
+  }
+  return `${workspaceId}/${storageKey}`;
+}
+
 export function validateCredentialFile(file: UploadedCredential | undefined): ValidCredentialFile {
   if (!file || !Buffer.isBuffer(file.buffer) || file.buffer.length === 0 || file.size !== file.buffer.length
     || file.size > MAX_CREDENTIAL_DOCUMENT_BYTES) throw new BadRequestException("Upload one valid credential document up to 10 MB.");
