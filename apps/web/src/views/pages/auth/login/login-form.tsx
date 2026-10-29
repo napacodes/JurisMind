@@ -13,8 +13,9 @@ import { loginSchema } from '@/lib/auth-schemas'
 
 type FormValues = { email: string; password: string }
 
-export default function LoginForm({ returnTo = '/workspaces', onAuthenticated }: {
+export default function LoginForm({ returnTo = '/workspaces', audience = 'firm', onAuthenticated }: {
   returnTo?: string
+  audience?: 'firm' | 'lawyer' | 'assistant' | 'administration'
   onAuthenticated?: () => void | Promise<void>
 }) {
   const router = useRouter()
@@ -30,7 +31,7 @@ export default function LoginForm({ returnTo = '/workspaces', onAuthenticated }:
   const submit = handleSubmit(async ({ email, password }) => {
     setError(null)
     try {
-      const login = await api.login(email, password)
+      const login = await api.login(email, password, audience)
       if (login.mfaRequired) { setMfaRequired(true); return }
       await finishAuthentication()
     } catch (reason) {

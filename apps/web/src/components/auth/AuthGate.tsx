@@ -26,7 +26,7 @@ export function AuthGate({ children, requireWorkspace = false, requirePlatformAd
     if (!hydrated) return
     if (state === 'unauthenticated') {
       const returnTo = safeReturnTo(`${pathname}${search ? `?${search}` : ''}`)
-      router.replace(`/pages/auth/login?returnTo=${encodeURIComponent(returnTo)}`)
+      router.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`)
     } else if (state === 'authenticated' && requireWorkspace && workspaces.length === 0) {
       router.replace('/workspaces')
     } else if (state === 'authenticated' && requireWorkspace && workspaceSelection.invalidRequest) {

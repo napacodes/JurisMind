@@ -62,7 +62,7 @@ export class RegistrationService {
         if (kind === "lawyer") {
           await tx.lawyerProfile.create({ data: { workspaceId, membershipId, isPrimary: true } });
         }
-        await tx.userSession.create({ data: { id: sessionId, userId, tokenHash: hashSessionToken(rawSessionToken), expiresAt } });
+        await tx.userSession.create({ data: { id: sessionId, userId, audience: kind === "firm" ? "FIRM" : "LAWYER", tokenHash: hashSessionToken(rawSessionToken), expiresAt } });
         await tx.securityAuditEvent.create({ data: {
           actorUserId: userId,
           workspaceId,

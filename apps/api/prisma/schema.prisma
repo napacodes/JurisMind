@@ -81,6 +81,13 @@ enum PlatformRole {
   SUPER_ADMIN
 }
 
+enum LoginAudience {
+  ADMINISTRATION
+  FIRM
+  LAWYER
+  ASSISTANT
+}
+
 model User {
   id                            String                       @id @default(uuid()) @db.Uuid
   email                         String                       @db.VarChar(320)
@@ -209,6 +216,7 @@ model PlatformRoleGrant {
 model UserSession {
   id         String    @id @default(uuid()) @db.Uuid
   userId     String    @map("user_id") @db.Uuid
+  audience   LoginAudience @default(FIRM)
   tokenHash  String    @unique @map("token_hash") @db.Char(64)
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
@@ -264,6 +272,7 @@ model MfaRecoveryCode {
 model LoginMfaChallenge {
   id         String    @id @default(uuid()) @db.Uuid
   userId     String    @map("user_id") @db.Uuid
+  audience   LoginAudience @default(FIRM)
   tokenHash  String    @unique @map("token_hash") @db.Char(64)
   createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)

@@ -41,7 +41,7 @@ const ResetPassword = () => {
           <Button
             variant='ghost'
             className='group w-full'
-            render={<Link href='/pages/auth/login' />}
+            render={<Link href='/login' />}
             nativeButton={false}
           >
             <ChevronLeftIcon className='size-5 transition-transform duration-200 group-hover:-translate-x-0.5' />

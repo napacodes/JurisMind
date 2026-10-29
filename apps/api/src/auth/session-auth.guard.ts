@@ -34,7 +34,21 @@ export class SessionAuthGuard implements CanActivate {
       throw new UnauthorizedException("Authentication required.");
     }
 
-    (request as AuthorizationRequest).authorizationContext = authorizationContext;
+    const audience = authenticatedSession.audience;
+    const scopedContext = audience === "ADMINISTRATION"
+      ? { ...authorizationContext, memberships: [] }
+      : {
+        ...authorizationContext,
+        platformRoles: [],
+        memberships: authorizationContext.memberships.filter((membership) =>
+        audience === "FIRM" ? membership.role === "FIRM_ADMIN" && membership.workspaceKind === "FIRM"
+          : audience === "LAWYER" ? membership.role === "LAWYER"
+            : membership.role === "ASSISTANT",
+        ),
+      };
+
+    (request as AuthorizationRequest).authorizationContext = scopedContext;
+    (request as AuthorizationRequest).authenticatedAudience = audience;
     (request as AuthorizationRequest).authenticatedSessionId = authenticatedSession.sessionId;
     return true;
   }

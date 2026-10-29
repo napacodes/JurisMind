@@ -47,6 +47,6 @@ export default function ResetPasswordForm() {
       <label className='block space-y-2 text-sm font-medium' htmlFor='confirm-password'>Confirm password<Input id='confirm-password' type='password' autoComplete='new-password' minLength={12} maxLength={256} required value={confirm} onChange={(e) => setConfirm(e.target.value)} /></label>
       <Button className='w-full' type='submit' disabled={busy}>{busy ? 'Updating…' : 'Set new password'}</Button>
     </>}
-    {message && <p role='status' className='text-sm'>{message} {message.startsWith('Password updated') && <Link className='underline' href='/pages/auth/login'>Sign in</Link>}</p>}
+    {message && <p role='status' className='text-sm'>{message} {message.startsWith('Password updated') && <Link className='underline' href='/login'>Sign in</Link>}</p>}
   </form>
 }

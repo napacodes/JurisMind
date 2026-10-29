@@ -8,6 +8,7 @@ import { AUTH_ENVIRONMENT, AuthEnvironment, SafeUserIdentity } from "./auth.type
 import { MfaCryptoService, isValidRecoveryCode } from "./mfa-crypto.service";
 import { PasswordHasherService } from "./password-hasher.service";
 import { LoginRateLimiterService } from "./login-rate-limiter.service";
+import { AuthService } from "./auth.service";
 
 @Injectable()
 export class MfaService {
@@ -16,6 +17,7 @@ export class MfaService {
     @Inject(MfaCryptoService) private readonly crypto: MfaCryptoService,
     @Inject(PasswordHasherService) private readonly passwordHasher: PasswordHasherService,
     @Inject(LoginRateLimiterService) private readonly limiter: LoginRateLimiterService,
+    @Inject(AuthService) private readonly authService: AuthService,
     @Inject(AUTH_ENVIRONMENT) private readonly environment: AuthEnvironment,
   ) {}
 
@@ -83,6 +85,7 @@ export class MfaService {
     if (!challenge || challenge.consumedAt || challenge.expiresAt <= new Date() || challenge.attempts >= 5 || !challenge.mfa.enabledAt || !encryptedSecret) throw new UnauthorizedException("Invalid or expired verification challenge.");
     const userRecord = await this.prisma.user.findUnique({ where: { id: challenge.userId } });
     if (!userRecord || userRecord.status !== "ACTIVE") throw new UnauthorizedException("Invalid or expired verification challenge.");
+    if (!(await this.authService.isEligibleForAudience(challenge.userId, challenge.audience))) throw new UnauthorizedException("Invalid or expired verification challenge.");
     const mfa = challenge.mfa;
     let recovery: { id: string } | null = null;
     let counter: number | null = null;
@@ -120,7 +123,7 @@ export class MfaService {
       rawSessionToken = token;
       expiresAt = new Date(now.getTime() + this.environment.sessionTtlSeconds * 1000);
       const id = randomUUID();
-      await tx.userSession.create({ data: { id, userId: challenge.userId, tokenHash: hashSessionToken(token), expiresAt } });
+      await tx.userSession.create({ data: { id, userId: challenge.userId, audience: challenge.audience, tokenHash: hashSessionToken(token), expiresAt } });
       await tx.securityAuditEvent.create({ data: { actorUserId: challenge.userId, eventType: "AUTH_LOGIN_SUCCEEDED", targetType: "UserSession", targetId: id, requestId, metadata: { mfaVerified: true, recoveryCodeUsed: Boolean(recovery), expiresAt: expiresAt.toISOString() } } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     this.limiter.clearIdentifier(rateKey);
