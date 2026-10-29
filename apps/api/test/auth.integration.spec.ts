@@ -53,6 +53,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     environment,
   );
   const userId = randomUUID();
+  const workspaceId = randomUUID();
   const email = `phase2-${randomUUID()}@example.invalid`;
   const passwordHash = await passwordHasher.hash("integration-test-password", environment.passwordMinLength);
   const auditRequestIds: string[] = [];
@@ -66,6 +67,8 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     await prisma.user.create({
       data: { id: userId, email, emailNormalized: email, fullName: "Isolated Auth Integration User", passwordHash },
     });
+    await prisma.practiceWorkspace.create({ data: { id: workspaceId, name: "Auth integration", slug: `auth-${randomUUID()}`, kind: "FIRM" } });
+    await prisma.practiceMembership.create({ data: { workspaceId, userId, role: "LAWYER", status: "ACTIVE", joinedAt: new Date() } });
     userCreated = true;
 
     // Exercise the real HTTP controllers and PostgreSQL-backed session store.
@@ -91,7 +94,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
       headers: { authorization: "Bearer integration-only-invalid-key", origin: trustedOrigin },
     });
     assert.equal(productionSinkResponse.status, 404, "local reset sink is unavailable in production configuration");
-    const invalidHttpLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    const invalidHttpLogin = await fetch(`${baseUrl}/api/auth/login/lawyer`, {
       method: "POST", headers: { origin: trustedOrigin, "content-type": "application/json" },
       body: JSON.stringify({ email, password: "wrong-password-value" }),
     });
@@ -99,7 +102,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     const invalidHttpBody = await invalidHttpLogin.json() as { message?: string };
     assert.equal(invalidHttpBody.message, "Invalid email or password.");
 
-    const httpLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    const httpLogin = await fetch(`${baseUrl}/api/auth/login/lawyer`, {
       method: "POST", headers: { origin: trustedOrigin, "content-type": "application/json" },
       body: JSON.stringify({ email, password: "integration-test-password" }),
     });
@@ -132,7 +135,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     assert.equal((await fetch(`${baseUrl}/api/auth/me`, { headers: { cookie: cookiePair } })).status, 401,
       "expired HTTP sessions are rejected");
 
-    const logoutLogin = await fetch(`${baseUrl}/api/auth/login`, {
+    const logoutLogin = await fetch(`${baseUrl}/api/auth/login/lawyer`, {
       method: "POST", headers: { origin: trustedOrigin, "content-type": "application/json" },
       body: JSON.stringify({ email, password: "integration-test-password" }),
     });
@@ -153,7 +156,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     const invalidRequestId = randomUUID();
     auditRequestIds.push(invalidRequestId);
     await assert.rejects(
-      authService.login({ email, password: "wrong-password-value" }, "127.0.0.1", invalidRequestId),
+      authService.login({ email, password: "wrong-password-value" }, "127.0.0.1", invalidRequestId, "LAWYER"),
       (error: { status?: number; message?: string }) => error.status === 401 && error.message === "Invalid email or password.",
     );
     const failedEvents = await prisma.securityAuditEvent.findMany({ where: { requestId: invalidRequestId } });
@@ -199,7 +202,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
       environment,
     );
     await assert.rejects(failingLogin.login(
-      { email, password: "integration-test-password" }, "127.0.0.1", randomUUID(),
+      { email, password: "integration-test-password" }, "127.0.0.1", randomUUID(), "LAWYER",
     ));
     assert.equal(await prisma.userSession.count({ where: { userId } }), sessionsBeforeFailedLogin,
       "failed login transaction must leave no session behind");
@@ -321,7 +324,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
       (error: { status?: number }) => error.status === 401, "a consumed reset token cannot be replayed");
 
     const mfaCrypto = new MfaCryptoService(environment);
-    const mfaService = new MfaService(prisma as unknown as PrismaService, mfaCrypto, passwordHasher, new LoginRateLimiterService(environment), environment);
+    const mfaService = new MfaService(prisma as unknown as PrismaService, mfaCrypto, passwordHasher, new LoginRateLimiterService(environment), authService, environment);
     const actor = { authorizationContext: { user: { id: userId, email, fullName: "Isolated Auth Integration User" }, platformRoles: [], memberships: [] } } as never;
     const setup = await mfaService.beginEnrollment(actor, { password: "new-integration-password" }, randomUUID());
     const currentCounter = Math.floor(Date.now() / 30_000);
@@ -332,12 +335,12 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
     assert.ok(storedRecovery);
     assert.equal(JSON.stringify(storedRecovery).includes(enabled.recoveryCodes[0]!), false);
     const beforeMfaLogin = await prisma.userSession.count({ where: { userId } });
-    const mfaLogin = await authService.login({ email, password: "new-integration-password" }, "127.0.0.1", randomUUID());
+    const mfaLogin = await authService.login({ email, password: "new-integration-password" }, "127.0.0.1", randomUUID(), "LAWYER");
     assert.equal("mfaRequired" in mfaLogin, true);
     assert.equal(await prisma.userSession.count({ where: { userId } }), beforeMfaLogin, "password alone must not create an authenticated session");
     const challengeResult = await mfaService.challenge((mfaLogin as { rawChallengeToken: string }).rawChallengeToken, { code: enabled.recoveryCodes[0] }, randomUUID());
     assert.equal(await authService.currentUser(challengeResult.rawSessionToken) !== null, true, "a valid recovery code completes MFA login");
-    const replayChallenge = await authService.login({ email, password: "new-integration-password" }, "127.0.0.1", randomUUID());
+    const replayChallenge = await authService.login({ email, password: "new-integration-password" }, "127.0.0.1", randomUUID(), "LAWYER");
     await assert.rejects(mfaService.challenge((replayChallenge as { rawChallengeToken: string }).rawChallengeToken, { code: enabled.recoveryCodes[0] }, randomUUID()),
       (error: { status?: number }) => error.status === 401, "a recovery code is single-use");
   } finally {
@@ -349,11 +352,13 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
           await transaction.securityAuditEvent.deleteMany({ where: { requestId: { in: auditRequestIds } } });
         }
         await transaction.userSession.deleteMany({ where: { userId } });
+        await transaction.practiceMembership.deleteMany({ where: { userId, workspaceId } });
         await transaction.mfaRecoveryCode.deleteMany({ where: { userId } });
         await transaction.loginMfaChallenge.deleteMany({ where: { userId } });
         await transaction.userMfa.deleteMany({ where: { userId } });
         await transaction.passwordResetToken.deleteMany({ where: { userId } });
         await transaction.user.deleteMany({ where: { id: userId } });
+        await transaction.practiceWorkspace.deleteMany({ where: { id: workspaceId } });
       });
     }
     await prisma.$disconnect();
@@ -361,7 +366,7 @@ test("authentication persistence and lifecycle are enforced by isolated PostgreS
 });
 
 async function normalLogin(service: AuthService, email: string, requestId: string): Promise<LoginResult> {
-  const result = await service.login({ email, password: "integration-test-password" }, "127.0.0.1", requestId);
+  const result = await service.login({ email, password: "integration-test-password" }, "127.0.0.1", requestId, "LAWYER");
   assert.equal("mfaRequired" in result, false, "integration identity is not enrolled in MFA");
   return result as LoginResult;
 }

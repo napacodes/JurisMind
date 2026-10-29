@@ -11,6 +11,7 @@ import { PasswordRecoveryService } from "../src/auth/password-recovery.service";
 import { ConfiguredPasswordResetDelivery } from "../src/auth/password-reset-delivery";
 import { LoginRateLimiterService } from "../src/auth/login-rate-limiter.service";
 import { AuthService, hashSessionToken } from "../src/auth/auth.service";
+import { SessionAuthGuard } from "../src/auth/session-auth.guard";
 import { AUTH_ENVIRONMENT, AuthEnvironment } from "../src/auth/auth.types";
 import { PrismaService } from "../src/database/prisma.service";
 import { configureCors } from "../src/config/cors";
@@ -51,9 +52,12 @@ interface FakeSession {
   expiresAt: Date;
   revokedAt: Date | null;
   lastSeenAt: Date | null;
+  audience: "ADMINISTRATION" | "FIRM" | "LAWYER" | "ASSISTANT";
 }
 
 class FakePrisma {
+  platformAdmin = false;
+  practiceRoles = ["LAWYER"];
   authorizationLookups = 0;
   readonly users: FakeUser[] = [{
     id: "user-test-1",
@@ -76,10 +80,12 @@ class FakePrisma {
       return user ? { ...user, memberships: [], platformRoleGrants: [] } : null;
     },
   };
+  readonly platformRoleGrant = { findFirst: async () => this.platformAdmin ? { id: "grant-admin" } : null };
+  readonly practiceMembership = { findFirst: async ({ where }: { where: { role: string } }) => this.practiceRoles.includes(where.role) ? { id: `membership-${where.role}` } : null };
   readonly userMfa = { findUnique: async () => this.mfaEnabled ? { enabledAt: new Date(), secretCiphertext: "ciphertext" } : null };
   readonly loginMfaChallenge = { create: async ({ data }: { data: Record<string, unknown> }) => { this.challenges.push(data); return data; } };
   readonly userSession = {
-    create: async ({ data }: { data: { id: string; userId: string; tokenHash: string; expiresAt: Date } }) => {
+    create: async ({ data }: { data: { id: string; userId: string; tokenHash: string; expiresAt: Date; audience: FakeSession["audience"] } }) => {
       const session: FakeSession = { ...data, revokedAt: null, lastSeenAt: null };
       this.sessions.set(session.tokenHash, session);
       return session;
@@ -207,7 +213,7 @@ test("MFA-enrolled password login creates only a challenge, never a session", as
   database = new FakePrisma();
   database.mfaEnabled = true;
   const authService = new AuthService(database as never, passwordHasher, new LoginRateLimiterService(environment), environment);
-  const outcome = await authService.login({ email, password }, "127.0.0.1", "mfa-test");
+  const outcome = await authService.login({ email, password }, "127.0.0.1", "mfa-test", "LAWYER");
   assert.equal("mfaRequired" in outcome, true);
   assert.equal(database.sessions.size, 0);
   assert.equal(database.challenges.length, 1);
@@ -244,7 +250,7 @@ test("development reset sink captures links in memory and drains them once", asy
 });
 
 test("login issues a Secure HttpOnly host cookie and persists only the token hash", async () => {
-  const response = await request("/api/auth/login", {
+  const response = await request("/api/auth/login/lawyer", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
     body: JSON.stringify({ email, password }),
@@ -288,12 +294,12 @@ test("login issues a Secure HttpOnly host cookie and persists only the token has
 });
 
 test("invalid and unknown credentials return the same generic response and are audited", async () => {
-  const known = await request("/api/auth/login", {
+  const known = await request("/api/auth/login/lawyer", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
     body: JSON.stringify({ email, password: "incorrect-password" }),
   });
-  const unknown = await request("/api/auth/login", {
+  const unknown = await request("/api/auth/login/lawyer", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
     body: JSON.stringify({ email: "unknown@example.invalid", password }),
@@ -304,7 +310,7 @@ test("invalid and unknown credentials return the same generic response and are a
   assert.equal(database.auditEvents.filter((event) => event.eventType === "AUTH_LOGIN_FAILED").length, 2);
 
   database.users[0]!.passwordHash = null;
-  const nullHashAccount = await request("/api/auth/login", {
+  const nullHashAccount = await request("/api/auth/login/lawyer", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
     body: JSON.stringify({ email, password: "jurismind-invalid-account-dummy-password" }),
@@ -358,7 +364,7 @@ test("logout revokes the server session and clears the cookie", async () => {
 });
 
 test("cookie-authenticated state changes require an exact trusted Origin", async () => {
-  const noOrigin = await request("/api/auth/login", {
+  const noOrigin = await request("/api/auth/login/lawyer", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -374,7 +380,7 @@ test("cookie-authenticated state changes require an exact trusted Origin", async
 
 test("login throttling returns a generic failure and records a throttle audit event", async () => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const response = await request("/api/auth/login", {
+    const response = await request("/api/auth/login/lawyer", {
       method: "POST",
       headers: { "content-type": "application/json", origin },
       body: JSON.stringify({ email, password: "bad-password" }),
@@ -417,7 +423,7 @@ test("registration throttling uses independent identifier and IP buckets from si
 });
 
 test("login ignores no user-controlled privilege fields and only returns identity", async () => {
-  const response = await request("/api/auth/login", {
+  const response = await request("/api/auth/login/administration", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
     body: JSON.stringify({ email, password, role: "SUPER_ADMIN" }),
@@ -425,6 +431,90 @@ test("login ignores no user-controlled privilege fields and only returns identit
   assert.equal(response.status, 401);
   assert.equal(database.sessions.size, 0);
   assert.equal(database.auditEvents.some((event) => event.eventType === "PLATFORM_ROLE_GRANTED"), false);
+});
+
+test("login audience is checked against server-side grants and active membership roles", async () => {
+  database.platformAdmin = true;
+  const adminLogin = await request("/api/auth/login/administration", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  assert.equal(adminLogin.status, 200);
+  assert.equal([...database.sessions.values()][0]?.audience, "ADMINISTRATION");
+  database.platformAdmin = false;
+  const lawyer = await request("/api/auth/login/lawyer", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  const firmAsAdmin = await request("/api/auth/login/administration", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  const lawyerAsFirm = await request("/api/auth/login/firm", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  assert.equal(firmAsAdmin.status, 401);
+  assert.equal(lawyerAsFirm.status, 401);
+  assert.equal(lawyer.status, 200);
+  const sessions = [...database.sessions.values()];
+  assert.equal(sessions[sessions.length - 1]?.audience, "LAWYER");
+});
+
+test("a firm-only identity cannot sign in as a platform administrator or lawyer", async () => {
+  database.practiceRoles = ["FIRM_ADMIN"];
+  const firm = await request("/api/auth/login/firm", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  const administration = await request("/api/auth/login/administration", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  const lawyer = await request("/api/auth/login/lawyer", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  assert.equal(firm.status, 200);
+  assert.equal(administration.status, 401);
+  assert.equal(lawyer.status, 401);
+});
+
+test("an active platform administrator grant excludes practice login", async () => {
+  database.platformAdmin = true;
+  database.practiceRoles = ["LAWYER", "FIRM_ADMIN"];
+  const lawyer = await request("/api/auth/login/lawyer", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  const firm = await request("/api/auth/login/firm", {
+    method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ email, password }),
+  });
+  assert.equal(lawyer.status, 401);
+  assert.equal(firm.status, 401);
+  assert.equal(database.sessions.size, 0);
+});
+
+test("a verified session is scoped to one authorization audience", async () => {
+  const token = randomBytes(32).toString("base64url");
+  const baseContext = {
+    user: { id: "user-test-1", email, fullName: "Sample Lawyer" },
+    platformRoles: ["SUPER_ADMIN"],
+    memberships: [
+      { workspaceId: "firm-1", workspaceName: "Firm", workspaceSlug: "firm", workspaceKind: "FIRM", role: "FIRM_ADMIN" },
+      { workspaceId: "firm-1", workspaceName: "Firm", workspaceSlug: "firm", workspaceKind: "FIRM", role: "LAWYER" },
+    ],
+  };
+  async function authorize(audience: "ADMINISTRATION" | "FIRM") {
+    const requestValue = { headers: { cookie: `__Host-jurismind_session=${token}` } };
+    const requestResponse = { clearCookie() {} };
+    const guard = new SessionAuthGuard(
+      { currentSession: async () => ({ user: baseContext.user, sessionId: "session-1", audience }) } as never,
+      { resolveForUser: async () => structuredClone(baseContext) } as never,
+      environment,
+    );
+    const execution = { switchToHttp: () => ({ getRequest: () => requestValue, getResponse: () => requestResponse }) } as never;
+    await guard.canActivate(execution);
+    return requestValue as typeof requestValue & { authorizationContext: typeof baseContext; authenticatedAudience: string };
+  }
+  const adminRequest = await authorize("ADMINISTRATION");
+  assert.equal(adminRequest.authorizationContext.platformRoles.length, 1);
+  assert.equal(adminRequest.authorizationContext.memberships.length, 0);
+  const firmRequest = await authorize("FIRM");
+  assert.deepEqual(firmRequest.authorizationContext.platformRoles, []);
+  assert.deepEqual(firmRequest.authorizationContext.memberships.map((item) => item.role), ["FIRM_ADMIN"]);
 });
 
 test("trusted-origin policy rejects untrusted and absent origins", () => {
@@ -463,7 +553,7 @@ test("CORS returns credentials only for the configured trusted origin", async ()
 });
 
 async function loginAndGetToken(): Promise<string> {
-  const response = await request("/api/auth/login", {
+  const response = await request("/api/auth/login/lawyer", {
     method: "POST",
     headers: { "content-type": "application/json", origin },
     body: JSON.stringify({ email, password }),

@@ -27,4 +27,5 @@ export interface AuthorizationRequest extends Request {
   authorizationContext?: AuthorizationContext;
   /** Set only by SessionAuthGuard after verifying the server-side session. */
   authenticatedSessionId?: string;
+  authenticatedAudience?: "ADMINISTRATION" | "FIRM" | "LAWYER" | "ASSISTANT";
 }

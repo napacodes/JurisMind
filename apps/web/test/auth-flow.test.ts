@@ -96,14 +96,14 @@ test('login request uses the real endpoint and never interprets server error bod
     seenBody = String(init?.body)
     return new Response(JSON.stringify({ message: 'database internals must not reach users' }), { status: 401 })
   }
-  await assert.rejects(api.login('lawyer@example.test', 'example-password'), (error: unknown) => {
+  await assert.rejects(api.login('lawyer@example.test', 'example-password', 'lawyer'), (error: unknown) => {
     assert.ok(error instanceof ApiError)
     assert.equal(error.status, 401)
     assert.equal(error.message, 'Your session is missing or has expired.')
     assert.equal(error.category, 'unauthorized')
     return true
   })
-  assert.equal(seenUrl.endsWith('/auth/login'), true)
+  assert.equal(seenUrl.endsWith('/auth/login/lawyer'), true)
   assert.equal(seenBody, JSON.stringify({ email: 'lawyer@example.test', password: 'example-password' }))
 })
 

@@ -84,6 +84,7 @@ function Navigation() {
           <Link className='hover:text-indigo-700' href='#faq'>FAQ</Link>
         </div>
         <div className='hidden items-center gap-3 md:flex'>
+          <Link className='px-3 py-2 text-sm font-semibold text-slate-700 hover:text-indigo-700' href='/login'>Login</Link>
           <Link className='px-3 py-2 text-sm font-semibold text-slate-700 hover:text-indigo-700' href='/dashboard'>Preview workspace</Link>
           <Link className='inline-flex items-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-indigo-700' href='#contact'>Get in touch <ArrowUpRight size={15} aria-hidden='true' /></Link>
         </div>
@@ -96,6 +97,7 @@ function Navigation() {
             <Link className='rounded-xl px-3 py-2.5 text-sm hover:bg-slate-50' href='#workflow'>How it works</Link>
             <Link className='rounded-xl px-3 py-2.5 text-sm hover:bg-slate-50' href='#plans'>Plans</Link>
             <Link className='rounded-xl px-3 py-2.5 text-sm hover:bg-slate-50' href='#faq'>FAQ</Link>
+            <Link className='rounded-xl px-3 py-2.5 text-sm font-semibold text-indigo-700 hover:bg-indigo-50' href='/login'>Login</Link>
             <Link className='rounded-xl bg-indigo-600 px-3 py-2.5 text-sm font-semibold text-white' href='/dashboard'>Preview workspace</Link>
           </div>
         </details>

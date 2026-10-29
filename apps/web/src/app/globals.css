@@ -2,6 +2,34 @@
 @import 'tw-animate-css';
 @import './shadcn-tailwind.css';
 
+.auth-shell-grid {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+@media (min-width: 48rem) and (max-width: 63.999rem) {
+  .auth-shell-grid {
+    height: calc(100vh - 2.5rem);
+    height: calc(100dvh - 2.5rem);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 64rem) {
+  .auth-shell-grid {
+    height: calc(100vh - 3rem);
+    height: calc(100dvh - 3rem);
+    grid-template-rows: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 80rem) {
+  .auth-shell-grid {
+    height: calc(100vh - 4rem);
+    height: calc(100dvh - 4rem);
+  }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

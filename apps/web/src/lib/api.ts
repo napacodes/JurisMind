@@ -136,7 +136,7 @@ function requestHeaders(): HeadersInit {
 }
 
 export const api = {
-  login: (email: string, password: string) => apiRequest<{ user?: CurrentUser; expiresAt?: string; mfaRequired: boolean }>('/auth/login', {
+  login: (email: string, password: string, audience: 'administration' | 'firm' | 'lawyer' | 'assistant') => apiRequest<{ user?: CurrentUser; expiresAt?: string; mfaRequired: boolean }>(`/auth/login/${audience}`, {
     method: 'POST', body: { email, password }, headers: requestHeaders(),
   }),
   registerFirm: (input: { fullName: string; email: string; password: string; firmName: string }) => apiRequest<{

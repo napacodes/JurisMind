@@ -6,13 +6,14 @@ import {
   Inject,
   NotFoundException,
   Post,
+  Param,
   Req,
   Res,
   UseGuards,
 } from "@nestjs/common";
 import { timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
-import { AuthService, createRequestId } from "./auth.service";
+import { AuthService, createRequestId, LoginAudience } from "./auth.service";
 import { mfaChallengeCookieName, readSessionCookie, sessionCookieName } from "./session-cookie";
 export { readSessionCookie, sessionCookieName } from "./session-cookie";
 import { CsrfOriginGuard } from "./csrf-origin.guard";
@@ -64,19 +65,24 @@ export class AuthController {
     return { user: result.user, expiresAt: result.expiresAt.toISOString(), mfaRequired: false as const };
   }
 
-  @Post("login")
+  @Post("login/:audience")
   @HttpCode(200)
   @UseGuards(CsrfOriginGuard)
   async login(
     @Body() payload: unknown,
+    @Param("audience") rawAudience: string,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ): Promise<{ user: { id: string; email: string; fullName: string }; expiresAt: string; mfaRequired?: false } | { mfaRequired: true }> {
     response.setHeader("Cache-Control", "no-store");
+    const audiences: Record<string, LoginAudience> = { administration: "ADMINISTRATION", firm: "FIRM", lawyer: "LAWYER", assistant: "ASSISTANT" };
+    const audience = audiences[rawAudience];
+    if (!audience) throw new NotFoundException();
     const result = await this.authService.login(
       payload,
       request.ip ?? "unknown",
       createRequestId(request.header("x-request-id")),
+      audience,
     );
     if ("mfaRequired" in result) {
       response.clearCookie(sessionCookieName(this.environment), { httpOnly: true, secure: this.environment.nodeEnv === "production", sameSite: "lax", path: "/" });

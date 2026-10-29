@@ -14,6 +14,8 @@ interface LoginPayload {
   password: string;
 }
 
+export type LoginAudience = "ADMINISTRATION" | "FIRM" | "LAWYER" | "ASSISTANT";
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -23,7 +25,7 @@ export class AuthService {
     @Inject(AUTH_ENVIRONMENT) private readonly environment: AuthEnvironment,
   ) {}
 
-  async login(rawPayload: unknown, remoteAddress: string, requestId: string): Promise<LoginOutcome> {
+  async login(rawPayload: unknown, remoteAddress: string, requestId: string, audience: LoginAudience): Promise<LoginOutcome> {
     const payload = this.parseLoginPayload(rawPayload);
     const normalizedEmail = payload?.email ?? "<invalid-login>";
     if (this.rateLimiter.isBlocked(normalizedEmail, remoteAddress)) {
@@ -36,7 +38,10 @@ export class AuthService {
       : null;
     const hash = user?.passwordHash ?? DUMMY_ARGON2ID_HASH;
     const passwordMatches = await this.passwordHasher.verify(payload?.password ?? "invalid", hash);
-    if (!payload || !user || !user.passwordHash || !passwordMatches || user.status !== "ACTIVE") {
+    const eligible = user && passwordMatches && user.status === "ACTIVE"
+      ? await this.isEligibleForAudience(user.id, audience)
+      : false;
+    if (!payload || !user || !user.passwordHash || !passwordMatches || user.status !== "ACTIVE" || !eligible) {
       this.rateLimiter.recordFailure(normalizedEmail, remoteAddress);
       await this.recordFailedLogin(requestId, "invalid_credentials");
       throw new UnauthorizedException(GENERIC_LOGIN_ERROR);
@@ -50,6 +55,7 @@ export class AuthService {
       await this.prisma.$transaction(async (transaction) => {
         await transaction.loginMfaChallenge.create({ data: {
           userId: user.id,
+          audience,
           tokenHash: hashSessionToken(rawChallengeToken),
           expiresAt,
         } });
@@ -71,7 +77,7 @@ export class AuthService {
 
     await this.prisma.$transaction(async (transaction) => {
       await transaction.userSession.create({
-        data: { id: sessionId, userId: user.id, tokenHash, expiresAt },
+        data: { id: sessionId, userId: user.id, audience, tokenHash, expiresAt },
       });
       await transaction.securityAuditEvent.create({
         data: {
@@ -86,6 +92,24 @@ export class AuthService {
     });
 
     return { user: safeUser, rawSessionToken, expiresAt };
+  }
+
+  async isEligibleForAudience(userId: string, audience: LoginAudience): Promise<boolean> {
+    const activePlatformGrant = await this.prisma.platformRoleGrant.findFirst({
+      where: { userId, role: "SUPER_ADMIN", revokedAt: null }, select: { id: true },
+    });
+    if (audience === "ADMINISTRATION") return Boolean(activePlatformGrant);
+    // Platform operator identities are a separate account class. A practice
+    // membership cannot turn a platform credential into a practice login.
+    if (activePlatformGrant) return false;
+    const role = audience === "FIRM" ? "FIRM_ADMIN" : audience === "LAWYER" ? "LAWYER" : "ASSISTANT";
+    const membership = await this.prisma.practiceMembership.findFirst({
+      where: {
+        userId, role, status: "ACTIVE", workspace: { is: { status: "ACTIVE", ...(audience === "FIRM" ? { kind: "FIRM" } : {}) } },
+        ...(audience === "ASSISTANT" ? { supervisor: { is: { role: "LAWYER", status: "ACTIVE", workspace: { is: { status: "ACTIVE" } } } } } : {}),
+      }, select: { id: true },
+    });
+    return Boolean(membership);
   }
 
   async createVerifiedSession(user: SafeUserIdentity, requestId: string): Promise<LoginResult> {
@@ -107,6 +131,7 @@ export class AuthService {
   async currentSession(rawSessionToken: string | undefined): Promise<{
     user: SafeUserIdentity;
     sessionId: string;
+    audience: LoginAudience;
   } | null> {
     if (!rawSessionToken || !isValidSessionToken(rawSessionToken)) return null;
     const session = await this.prisma.userSession.findUnique({
@@ -143,7 +168,7 @@ export class AuthService {
       data: { lastSeenAt: now },
     });
     if (active.count !== 1) return null;
-    return { user: toSafeUser(session.user), sessionId: session.id };
+    return { user: toSafeUser(session.user), sessionId: session.id, audience: session.audience };
   }
 
   async logout(rawSessionToken: string | undefined, requestId: string): Promise<void> {
