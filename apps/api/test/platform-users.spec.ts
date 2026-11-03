@@ -1,7 +1,23 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { BadRequestException } from "@nestjs/common";
-import { parseCreatePlatformAdminInput, parsePlatformUserId, parsePlatformUserListQuery, parsePlatformUserStatus } from "../src/platform-admin/platform-users.dto";
+import { parseCreatePlatformAdminInput, parsePlatformUserId, parsePlatformUserListQuery, parsePlatformUserStatus, parsePracticeUserListQuery } from "../src/platform-admin/platform-users.dto";
+
+test("practice account filters accept supported roles and preserve pagination defaults", () => {
+  assert.deepEqual(parsePracticeUserListQuery({ role: "FIRM", kycStatus: "PENDING", emailStatus: "UNVERIFIED" }), {
+    page: 1, pageSize: 10, role: "FIRM", kycStatus: "PENDING", emailStatus: "UNVERIFIED",
+  });
+  assert.deepEqual(parsePracticeUserListQuery({ page: "2", pageSize: "25", search: "  counsel@example.test " }), {
+    page: 2, pageSize: 25, search: "counsel@example.test",
+  });
+});
+
+test("practice account filters reject platform roles and unknown query fields", () => {
+  for (const query of [
+    { role: "SUPER_ADMIN" }, { role: "FIRM_ADMIN" }, { kycStatus: "DRAFT" },
+    { emailStatus: "PENDING" }, { status: "SUSPENDED" }, { phone: "+15555550123" },
+  ]) assert.throws(() => parsePracticeUserListQuery(query), (error) => error instanceof BadRequestException);
+});
 
 test("platform user query accepts bounded filters and defaults safely", () => {
   assert.deepEqual(parsePlatformUserListQuery({}), { page: 1, pageSize: 25 });

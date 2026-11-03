@@ -19,6 +19,30 @@ export interface CreatePlatformAdminInput {
   password: string;
 }
 
+export interface PracticeUserListQuery {
+  page: number; pageSize: number; search?: string; role?: "FIRM" | "LAWYER" | "ASSISTANT";
+  status?: UserStatus; kycStatus?: "PENDING" | "VERIFIED" | "NOT_SUBMITTED"; emailStatus?: "VERIFIED" | "UNVERIFIED";
+}
+
+export function parsePracticeUserListQuery(raw: Record<string, unknown>): PracticeUserListQuery {
+  const allowed = ["page", "pageSize", "search", "role", "status", "kycStatus", "emailStatus"];
+  if (Object.keys(raw).some((key) => !allowed.includes(key))) throw new BadRequestException("Invalid practice-user query.");
+  const searchValue = scalar(raw.search, "search");
+  const search = searchValue?.trim();
+  if (search && (search.length > 100 || /[\u0000-\u001f]/.test(search))) throw new BadRequestException("Invalid search value.");
+  const role = scalar(raw.role, "role");
+  const kycStatus = scalar(raw.kycStatus, "KYC status");
+  const emailStatus = scalar(raw.emailStatus, "email status");
+  const status = scalar(raw.status, "account status");
+  if (role !== undefined && !["FIRM", "LAWYER", "ASSISTANT"].includes(role)) throw new BadRequestException("Invalid account role.");
+  if (kycStatus !== undefined && !["PENDING", "VERIFIED", "NOT_SUBMITTED"].includes(kycStatus)) throw new BadRequestException("Invalid KYC status.");
+  if (emailStatus !== undefined && !["VERIFIED", "UNVERIFIED"].includes(emailStatus)) throw new BadRequestException("Invalid email status.");
+  if (status !== undefined && !Object.values(UserStatus).includes(status as UserStatus)) throw new BadRequestException("Invalid account status.");
+  return { page: positiveInteger(scalar(raw.page, "page"), 1, 10_000, "page"), pageSize: positiveInteger(scalar(raw.pageSize, "page size"), 10, 100, "page size"),
+    ...(search ? { search } : {}), ...(role ? { role: role as PracticeUserListQuery["role"] } : {}), ...(status ? { status: status as UserStatus } : {}),
+    ...(kycStatus ? { kycStatus: kycStatus as PracticeUserListQuery["kycStatus"] } : {}), ...(emailStatus ? { emailStatus: emailStatus as PracticeUserListQuery["emailStatus"] } : {}) };
+}
+
 function scalar(value: unknown, label: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string") throw new BadRequestException(`Invalid ${label}.`);
