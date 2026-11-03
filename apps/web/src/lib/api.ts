@@ -159,6 +159,11 @@ export const api = {
     for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
     return apiRequest<PlatformUserPage>(`/platform-admin/users?${params.toString()}`)
   },
+  practiceUsers: (query: { page: number; pageSize: number; search?: string; role?: string; status?: string; kycStatus?: string; emailStatus?: string }) => {
+    const params = new URLSearchParams()
+    for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
+    return apiRequest<PracticeUserPage>(`/platform-admin/users/practice-accounts?${params.toString()}`)
+  },
   createPlatformAdmin: (input: { fullName: string; email: string; password: string }) => apiRequest<{
     id: string; email: string; fullName: string; status: 'ACTIVE' | 'DISABLED'; createdAt: string; platformRoles: string[]
   }>('/platform-admin/users', { method: 'POST', body: input, headers: requestHeaders() }),
@@ -330,6 +335,13 @@ export type PlatformUserDetail = Omit<PlatformUserSummary, 'practiceMemberships'
     joinedAt: string | null
     workspace: { id: string; name: string; kind: WorkspaceKind; status: string }
   }>
+}
+
+export type PracticeUserPage = {
+  users: Array<{ id: string; email: string; fullName: string; status: 'ACTIVE' | 'DISABLED'; emailVerifiedAt: string | null;
+    createdAt: string; lastLoginAt: string | null; role: 'FIRM' | 'LAWYER' | 'ASSISTANT'; workspaceName: string; joinedAt: string; kycStatus: string; documentStatus: 'SUBMITTED' | 'MISSING' }>
+  pagination: { page: number; pageSize: number; total: number; totalPages: number }
+  statistics: { total: number; activeToday: number; activeYesterday: number; createdThisWeek: number; createdPreviousWeek: number; kycPending: number; suspended: number; dailyJoins: number[]; dailyActivity: number[] }
 }
 
 export type ContentEntry = {

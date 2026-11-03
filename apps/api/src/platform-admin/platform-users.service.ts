@@ -15,7 +15,7 @@ import { AuthorizationService } from "../authorization/authorization.service";
 import { Permission } from "../authorization/permissions";
 import { PrismaService } from "../database/prisma.service";
 import type { AuthorizationContext } from "../authorization/authorization.types";
-import type { CreatePlatformAdminInput, PlatformUserListQuery } from "./platform-users.dto";
+import type { CreatePlatformAdminInput, PlatformUserListQuery, PracticeUserListQuery } from "./platform-users.dto";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -58,6 +58,98 @@ export class PlatformUsersService {
         })),
         pagination: { page: query.page, pageSize: query.pageSize, total, totalPages: Math.ceil(total / query.pageSize) },
       };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }
+
+  async listPractice(query: PracticeUserListQuery, actorId: string, sessionId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.requireAdmin(tx, actorId, sessionId);
+      const now = new Date();
+      const today = new Date(now); today.setUTCHours(0, 0, 0, 0);
+      const yesterday = new Date(today); yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const weekAgo = new Date(today); weekAgo.setUTCDate(weekAgo.getUTCDate() - 7);
+      const twoWeeksAgo = new Date(weekAgo); twoWeeksAgo.setUTCDate(twoWeeksAgo.getUTCDate() - 7);
+      const sevenDaysAgo = new Date(today); sevenDaysAgo.setUTCDate(sevenDaysAgo.getUTCDate() - 6);
+      const tomorrow = new Date(today); tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+      const kycPending = { OR: [
+        { memberships: { some: { status: "ACTIVE", role: "LAWYER", workspace: { is: { status: "ACTIVE" } }, credentialSubmissions: { some: { status: "PENDING" } } } } },
+        { memberships: { some: { status: "ACTIVE", role: "FIRM_ADMIN", workspace: { is: { kind: "FIRM", firmVerifications: { some: { status: "PENDING" } } } } } } },
+      ] } satisfies Prisma.UserWhereInput;
+      const membershipScope: Prisma.PracticeMembershipWhereInput = query.role === "FIRM"
+        ? { status: "ACTIVE", role: "FIRM_ADMIN", workspace: { is: { kind: "FIRM", status: "ACTIVE" } } }
+        : { status: "ACTIVE", workspace: { is: { status: "ACTIVE" } }, ...(query.role ? { role: query.role } : {}) };
+      const base: Prisma.UserWhereInput = {
+        platformRoleGrants: { none: { role: "SUPER_ADMIN", revokedAt: null } },
+        memberships: { some: membershipScope },
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.emailStatus ? { emailVerifiedAt: query.emailStatus === "VERIFIED" ? { not: null } : null } : {}),
+        ...(query.search ? { OR: [ { fullName: { contains: query.search, mode: "insensitive" } }, { email: { contains: query.search, mode: "insensitive" } }, { emailNormalized: { contains: query.search.toLowerCase() } } ] } : {}),
+        ...(query.kycStatus === "PENDING" ? kycPending : {}),
+        ...(query.kycStatus === "VERIFIED" ? { AND: [{ OR: [
+          { memberships: { some: { status: "ACTIVE", role: "LAWYER", workspace: { is: { status: "ACTIVE" } }, credentialSubmissions: { some: { status: "APPROVED" } } } } },
+          { memberships: { some: { status: "ACTIVE", role: "FIRM_ADMIN", workspace: { is: { kind: "FIRM", status: "ACTIVE", firmVerifications: { some: { status: "APPROVED" } } } } } } },
+        ] }] } : {}),
+        ...(query.kycStatus === "NOT_SUBMITTED" ? { AND: [{ memberships: { some: {
+          status: "ACTIVE", role: { in: ["LAWYER", "FIRM_ADMIN"] }, credentialSubmissions: { none: {} },
+          workspace: { is: { firmVerifications: { none: {} } } },
+        } } }] } : {}),
+      };
+      const allPractice: Prisma.UserWhereInput = {
+        platformRoleGrants: { none: { role: "SUPER_ADMIN", revokedAt: null } },
+        memberships: { some: { status: "ACTIVE", workspace: { is: { status: "ACTIVE" } } } },
+      };
+      const [total, users, activeTodayIds, activeYesterdayIds, createdThisWeek, createdPreviousWeek, suspended, kycPendingCount, daily, dailyActivity] = await Promise.all([
+        tx.user.count({ where: base }),
+        tx.user.findMany({ where: base, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (query.page - 1) * query.pageSize, take: query.pageSize,
+          select: { id: true, email: true, fullName: true, status: true, emailVerifiedAt: true, createdAt: true,
+            sessions: { where: { lastSeenAt: { not: null }, audience: { not: "ADMINISTRATION" } }, orderBy: { lastSeenAt: "desc" }, take: 1, select: { lastSeenAt: true } },
+            memberships: { where: { status: "ACTIVE", workspace: { is: { status: "ACTIVE" } } }, orderBy: { joinedAt: "desc" },
+              select: { id: true, role: true, joinedAt: true, workspace: { select: { id: true, name: true, kind: true,
+                firmVerifications: { where: { status: { not: "DRAFT" } }, orderBy: { createdAt: "desc" }, take: 1, select: { status: true, documents: { select: { id: true } } } } } },
+                credentialSubmissions: { where: { status: { not: "DRAFT" } }, orderBy: { createdAt: "desc" }, take: 1, select: { status: true, documents: { select: { id: true } } } } } } } }),
+        tx.userSession.findMany({ where: { lastSeenAt: { gte: today }, audience: { not: "ADMINISTRATION" }, user: { ...allPractice, status: "ACTIVE" } }, distinct: ["userId"], select: { userId: true } }),
+        tx.userSession.findMany({ where: { lastSeenAt: { gte: yesterday, lt: today }, audience: { not: "ADMINISTRATION" }, user: { ...allPractice, status: "ACTIVE" } }, distinct: ["userId"], select: { userId: true } }),
+        tx.user.count({ where: { ...allPractice, createdAt: { gte: weekAgo } } }),
+        tx.user.count({ where: { ...allPractice, createdAt: { gte: twoWeeksAgo, lt: weekAgo } } }),
+        tx.user.count({ where: { ...allPractice, status: "DISABLED" } }),
+        tx.user.count({ where: { ...allPractice, ...kycPending } }),
+        tx.user.groupBy({ by: ["createdAt"], where: { ...allPractice, createdAt: { gte: sevenDaysAgo } }, _count: true }),
+        tx.$queryRaw<Array<{ day: string; count: number }>>`
+          SELECT (s.last_seen_at AT TIME ZONE 'UTC')::date::text AS day, COUNT(DISTINCT s.user_id)::int AS count
+          FROM user_sessions s
+          WHERE s.last_seen_at >= ${sevenDaysAgo} AND s.last_seen_at < ${tomorrow}
+            AND s.audience <> 'ADMINISTRATION'
+            AND EXISTS (
+              SELECT 1 FROM users u
+              WHERE u.id = s.user_id AND u.status = 'ACTIVE'
+                AND NOT EXISTS (SELECT 1 FROM platform_role_grants p WHERE p.user_id = u.id AND p.role = 'SUPER_ADMIN' AND p.revoked_at IS NULL)
+                AND EXISTS (
+                  SELECT 1 FROM practice_memberships m JOIN practice_workspaces w ON w.id = m.workspace_id
+                  WHERE m.user_id = u.id AND m.status = 'ACTIVE' AND w.status = 'ACTIVE'
+                )
+            )
+          GROUP BY 1
+        `,
+      ]);
+      return { users: users.map((user) => {
+        const membership = user.memberships.find((item) => query.role === "FIRM" ? item.role === "FIRM_ADMIN" && item.workspace.kind === "FIRM" : query.role ? item.role === query.role : true) ?? user.memberships[0];
+        const kycStatus = membership?.role === "FIRM_ADMIN" ? membership.workspace.firmVerifications[0]?.status ?? "NOT_SUBMITTED" : membership?.credentialSubmissions[0]?.status ?? "NOT_SUBMITTED";
+        const documentsSubmitted = membership?.role === "FIRM_ADMIN"
+          ? (membership.workspace.firmVerifications[0]?.documents.length ?? 0) > 0
+          : (membership?.credentialSubmissions[0]?.documents.length ?? 0) > 0;
+        return { id: user.id, email: user.email, fullName: user.fullName, status: user.status, emailVerifiedAt: user.emailVerifiedAt,
+          createdAt: user.createdAt, lastLoginAt: user.sessions[0]?.lastSeenAt ?? null,
+          role: membership?.role === "FIRM_ADMIN" ? "FIRM" : membership?.role ?? "LAWYER", workspaceName: membership?.workspace.name ?? "Practice account",
+          joinedAt: membership?.joinedAt ?? user.createdAt, kycStatus, documentStatus: documentsSubmitted ? "SUBMITTED" : "MISSING" };
+      }), pagination: { page: query.page, pageSize: query.pageSize, total, totalPages: Math.ceil(total / query.pageSize) },
+        statistics: { total: await tx.user.count({ where: allPractice }), activeToday: activeTodayIds.length, activeYesterday: activeYesterdayIds.length, createdThisWeek, createdPreviousWeek,
+          kycPending: kycPendingCount, suspended, dailyActivity: Array.from({ length: 7 }, (_, index) => {
+            const day = new Date(sevenDaysAgo); day.setUTCDate(day.getUTCDate() + index);
+            return dailyActivity.find((entry) => entry.day === day.toISOString().slice(0, 10))?.count ?? 0;
+          }), dailyJoins: Array.from({ length: 7 }, (_, index) => {
+            const day = new Date(sevenDaysAgo); day.setUTCDate(day.getUTCDate() + index);
+            return daily.filter((entry) => entry.createdAt.toISOString().slice(0, 10) === day.toISOString().slice(0, 10)).reduce((sum, entry) => sum + entry._count, 0);
+          }) } };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   }
 

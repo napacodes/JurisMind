@@ -7,7 +7,7 @@ import type { AuthorizationRequest } from "../authorization/authorization.types"
 import { Permission } from "../authorization/permissions";
 import { PermissionsGuard } from "../authorization/permissions.guard";
 import { RequirePermission } from "../authorization/require-permission.decorator";
-import { parseCreatePlatformAdminInput, parsePlatformUserId, parsePlatformUserListQuery, parsePlatformUserStatus } from "./platform-users.dto";
+import { parseCreatePlatformAdminInput, parsePlatformUserId, parsePlatformUserListQuery, parsePlatformUserStatus, parsePracticeUserListQuery } from "./platform-users.dto";
 import { PlatformUsersService } from "./platform-users.service";
 
 /** Platform-wide account administration; practice roles never authorize these routes. */
@@ -32,6 +32,14 @@ export class PlatformUsersController {
   list(@Query() query: Record<string, unknown>, @Req() request: AuthorizationRequest, @Res({ passthrough: true }) response: Response) {
     response.setHeader("Cache-Control", "no-store");
     return this.users.list(parsePlatformUserListQuery(query), request.authorizationContext!.user.id, request.authenticatedSessionId!);
+  }
+
+  @Get("practice-accounts")
+  @UseGuards(PermissionsGuard)
+  @RequirePermission(Permission.PlatformAdministration)
+  listPractice(@Query() query: Record<string, unknown>, @Req() request: AuthorizationRequest, @Res({ passthrough: true }) response: Response) {
+    response.setHeader("Cache-Control", "no-store");
+    return this.users.listPractice(parsePracticeUserListQuery(query), request.authorizationContext!.user.id, request.authenticatedSessionId!);
   }
 
   @Get(":userId")
