@@ -13,6 +13,7 @@ import { hashSessionToken } from "../src/auth/auth.service";
 import { PasswordHasherService } from "../src/auth/password-hasher.service";
 import { configureCors } from "../src/config/cors";
 import { PrismaService } from "../src/database/prisma.service";
+import { PrivateDocumentStorage } from "../src/lawyer-verification/private-document-storage";
 
 const testDatabaseUrl = process.env.AUTH_TEST_DATABASE_URL;
 if (testDatabaseUrl) {
@@ -53,6 +54,10 @@ test("platform user administration is Super Admin-only, bounded, audited, and is
     platformRoleGrants: { some: { role: "SUPER_ADMIN" as const, revokedAt: null } },
   };
   const requestIds: string[] = [];
+  const practiceCreatedUserIds: string[] = [];
+  const practiceCreatedWorkspaceIds: string[] = [];
+  const profilePhotoKeys: string[] = [];
+  let photoStorage: PrivateDocumentStorage | undefined;
   const createdAdminEmail = `new-platform-admin-${randomUUID()}@example.invalid`;
   const functionName = `phase13_fail_audit_${randomUUID().replaceAll("-", "")}`;
   const triggerName = functionName;
@@ -66,9 +71,9 @@ test("platform user administration is Super Admin-only, bounded, audited, and is
   const request = (path: string, method = "GET", who: number | null = 0, body?: unknown, requestId?: string) => {
     const headers = new Headers({ origin });
     if (who !== null) headers.set("cookie", `${cookieName}=${tokens[who]}`);
-    if (body !== undefined) headers.set("content-type", "application/json");
+    if (body !== undefined && !(body instanceof FormData)) headers.set("content-type", "application/json");
     if (requestId) headers.set("x-request-id", requestId);
-    return fetch(`${baseUrl}${path}`, { method, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    return fetch(`${baseUrl}${path}`, { method, headers, ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }) });
   };
 
   try {
@@ -92,12 +97,14 @@ test("platform user administration is Super Admin-only, bounded, audited, and is
         { id: membershipIds[1]!, workspaceId: workspaceIds[0]!, userId: targetId, role: "LAWYER", status: "ACTIVE", joinedAt: new Date() },
         { id: membershipIds[2]!, workspaceId: workspaceIds[1]!, userId: disabledId, role: "ASSISTANT", status: "SUSPENDED" },
       ] });
+      await tx.lawyerProfile.create({ data: { workspaceId: workspaceIds[0]!, membershipId: membershipIds[1]!, isPrimary: false } });
       await tx.platformRoleGrant.createMany({ data: [
         { id: randomUUID(), userId: actorId, role: "SUPER_ADMIN" },
         { id: randomUUID(), userId: viableAdminId, role: "SUPER_ADMIN" },
       ] });
       await tx.userSession.createMany({ data: sessionIds.map((id, index) => ({
         id, userId: sessionUserIds[index]!, tokenHash: hashSessionToken(tokens[index]!),
+        audience: index === 0 || index >= 4 ? "ADMINISTRATION" as const : index === 1 ? "FIRM" as const : index === 2 ? "LAWYER" as const : "ASSISTANT" as const,
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
         ...(index === 3 ? { revokedAt: new Date() } : {}),
       })) });
@@ -111,6 +118,7 @@ test("platform user administration is Super Admin-only, bounded, audited, and is
       .overrideProvider(PrismaService).useValue(prisma)
       .overrideProvider(AUTH_ENVIRONMENT).useValue(environment)
       .compile();
+    photoStorage = testingModule.get(PrivateDocumentStorage);
     app = testingModule.createNestApplication({ logger: false });
     configureCors(app, environment.trustedOrigins);
     await app.listen(0, "127.0.0.1");
@@ -153,6 +161,119 @@ test("platform user administration is Super Admin-only, bounded, audited, and is
 
     const duplicateCreateResponse = await request("/api/platform-admin/users", "POST", 0, { fullName: "Duplicate", email: createdAdminEmail, password: "safe-password-12345" });
     assert.equal(duplicateCreateResponse.status, 409, "duplicate email addresses are rejected");
+
+    const practiceForm = (values: Record<string, string>, withPhoto = false) => {
+      const form = new FormData();
+      for (const [key, value] of Object.entries(values)) form.set(key, value);
+      if (withPhoto) form.set("photo", new Blob([Uint8Array.from([137,80,78,71,13,10,26,10,0])], { type: "image/png" }), "profile.png");
+      return form;
+    };
+    const practiceRequest = (values: Record<string, string>, who: number | null = 0, withPhoto = false) => {
+      const requestId = randomUUID(); requestIds.push(requestId);
+      return request("/api/platform-admin/users/practice-accounts", "POST", who, practiceForm(values, withPhoto), requestId);
+    };
+    const practiceBase = (suffix: string) => ({
+      firstName: "Synthetic", lastName: "Practice", username: `u${randomUUID().replaceAll("-", "").slice(0, 20)}`, email: `practice-${suffix}@example.invalid`,
+      countryCode: "DZ", phoneNumber: "+213555123456", password: "synthetic-practice-password", status: "ACTIVE",
+    });
+
+    assert.equal((await practiceRequest({ ...practiceBase(`unauth-${randomUUID()}`), accountType: "FIRM", firmName: "Unauthorized Firm" }, null)).status, 401,
+      "unauthenticated practice-account creation is rejected");
+    assert.equal((await practiceRequest({ ...practiceBase(`denied-${randomUUID()}`), accountType: "FIRM", firmName: "Denied Firm" }, 1)).status, 403,
+      "a practice administrator cannot create platform-managed accounts");
+    assert.equal((await practiceRequest({ ...practiceBase(`super-${randomUUID()}`), accountType: "SUPER_ADMIN" }, 0)).status, 400,
+      "crafted platform-role values are rejected");
+
+    const firmValues = { ...practiceBase(`firm-${randomUUID()}`), accountType: "FIRM", firmName: "Synthetic Created Firm" };
+    const firmResponse = await practiceRequest(firmValues, 0, true);
+    assert.equal(firmResponse.status, 201, await firmResponse.clone().text());
+    const firmCreated = await firmResponse.json() as { id: string; workspaceId: string; membershipId: string; role: string; status: string };
+    practiceCreatedUserIds.push(firmCreated.id); practiceCreatedWorkspaceIds.push(firmCreated.workspaceId);
+    assert.equal(firmCreated.role, "FIRM_ADMIN");
+    assert.equal((await prisma.practiceWorkspace.findUniqueOrThrow({ where: { id: firmCreated.workspaceId } })).kind, "FIRM");
+    assert.equal((await prisma.practiceMembership.findUniqueOrThrow({ where: { id: firmCreated.membershipId } })).status, "ACTIVE");
+    assert.equal(JSON.stringify(firmCreated).includes("passwordHash"), false);
+    const firmDbUser = await prisma.user.findUniqueOrThrow({ where: { id: firmCreated.id } });
+    assert.ok(firmDbUser.profilePhotoKey);
+    profilePhotoKeys.push(firmDbUser.profilePhotoKey!);
+    assert.notEqual(firmDbUser.passwordHash, "synthetic-practice-password");
+    assert.ok(await hasher.verify("synthetic-practice-password", firmDbUser.passwordHash!));
+    const profilePhotoResponse = await request(`/api/platform-admin/users/${firmCreated.id}/profile-photo`);
+    assert.equal(profilePhotoResponse.status, 200);
+    assert.equal(profilePhotoResponse.headers.get("content-type"), "image/png");
+    assert.equal(profilePhotoResponse.headers.get("x-content-type-options"), "nosniff");
+    assert.deepEqual(Buffer.from(await profilePhotoResponse.arrayBuffer()), Buffer.from([137,80,78,71,13,10,26,10,0]));
+    assert.equal((await request(`/api/platform-admin/users/${firmCreated.id}/profile-photo`, "GET", 1)).status, 403,
+      "profile photos require Platform Administration permission");
+
+    const individualResponse = await practiceRequest({ ...practiceBase(`individual-${randomUUID()}`), accountType: "LAWYER", workspaceMode: "INDIVIDUAL" });
+    assert.equal(individualResponse.status, 201);
+    const individualCreated = await individualResponse.json() as { id: string; workspaceId: string; membershipId: string; role: string };
+    practiceCreatedUserIds.push(individualCreated.id); practiceCreatedWorkspaceIds.push(individualCreated.workspaceId);
+    assert.equal(individualCreated.role, "LAWYER");
+    assert.equal((await prisma.practiceWorkspace.findUniqueOrThrow({ where: { id: individualCreated.workspaceId } })).kind, "INDIVIDUAL");
+    assert.equal((await prisma.lawyerProfile.findUniqueOrThrow({ where: { membershipId: individualCreated.membershipId } })).isPrimary, true);
+
+    const firmLawyerResponse = await practiceRequest({ ...practiceBase(`firm-lawyer-${randomUUID()}`), accountType: "LAWYER", workspaceMode: "FIRM", workspaceId: workspaceIds[0]! });
+    assert.equal(firmLawyerResponse.status, 201);
+    const firmLawyerCreated = await firmLawyerResponse.json() as { id: string; workspaceId: string; membershipId: string; role: string };
+    practiceCreatedUserIds.push(firmLawyerCreated.id);
+    assert.equal(firmLawyerCreated.workspaceId, workspaceIds[0]);
+    assert.equal((await prisma.lawyerProfile.findUniqueOrThrow({ where: { membershipId: firmLawyerCreated.membershipId } })).isPrimary, false);
+
+    const assistantResponse = await practiceRequest({ ...practiceBase(`assistant-${randomUUID()}`), accountType: "ASSISTANT", supervisorMembershipId: membershipIds[1]! });
+    assert.equal(assistantResponse.status, 201);
+    const assistantCreated = await assistantResponse.json() as { id: string; workspaceId: string; membershipId: string; role: string };
+    practiceCreatedUserIds.push(assistantCreated.id);
+    assert.equal(assistantCreated.workspaceId, workspaceIds[0]);
+    assert.equal(assistantCreated.role, "ASSISTANT");
+    assert.equal((await prisma.practiceMembership.findUniqueOrThrow({ where: { id: assistantCreated.membershipId } })).supervisingLawyerMembershipId, membershipIds[1]);
+    assert.equal((await practiceRequest({ ...practiceBase(`cross-workspace-${randomUUID()}`), accountType: "ASSISTANT", workspaceId: workspaceIds[1]!, supervisorMembershipId: membershipIds[1]! })).status, 400,
+      "assistant forms cannot submit a conflicting workspace");
+    await assert.rejects(prisma.practiceMembership.create({ data: {
+      workspaceId: workspaceIds[1]!, userId: targetId, role: "ASSISTANT", status: "ACTIVE", supervisingLawyerMembershipId: membershipIds[1]!,
+    } }), "the composite foreign key prevents cross-workspace supervision");
+    assert.equal((await practiceRequest({ ...practiceBase(`invalid-dto-${randomUUID()}`), username: "bad username", accountType: "FIRM", firmName: "Invalid" })).status, 400);
+
+    const duplicateEmail = practiceBase(`duplicate-email-${randomUUID()}`);
+    const duplicateEmailFirst = await practiceRequest({ ...duplicateEmail, accountType: "FIRM", firmName: "Duplicate email firm" });
+    assert.equal(duplicateEmailFirst.status, 201);
+    const duplicateEmailUser = await duplicateEmailFirst.json() as { id: string; workspaceId: string };
+    practiceCreatedUserIds.push(duplicateEmailUser.id); practiceCreatedWorkspaceIds.push(duplicateEmailUser.workspaceId);
+    const duplicateEmailResponse = await practiceRequest({ ...duplicateEmail, username: `u${randomUUID().replaceAll("-", "").slice(0, 20)}`, accountType: "FIRM", firmName: "Should not persist" });
+    assert.equal(duplicateEmailResponse.status, 409);
+    const duplicateUsernameResponse = await practiceRequest({ ...practiceBase(`email-collision-${randomUUID()}`), username: duplicateEmail.username, accountType: "FIRM", firmName: "Should not persist" });
+    assert.equal(duplicateUsernameResponse.status, 409);
+    assert.equal(await prisma.practiceWorkspace.count({ where: { name: "Should not persist" } }), 0, "unique conflicts do not leave workspaces behind");
+
+    const missingSupervisor = await practiceRequest({ ...practiceBase(`missing-supervisor-${randomUUID()}`), accountType: "ASSISTANT" });
+    assert.equal(missingSupervisor.status, 400);
+
+    const inactiveValues = { ...practiceBase(`inactive-${randomUUID()}`), accountType: "LAWYER", workspaceMode: "INDIVIDUAL", status: "DISABLED" };
+    const inactiveResponse = await practiceRequest(inactiveValues);
+    assert.equal(inactiveResponse.status, 201);
+    const inactiveCreated = await inactiveResponse.json() as { id: string; workspaceId: string; membershipId: string; status: string };
+    practiceCreatedUserIds.push(inactiveCreated.id); practiceCreatedWorkspaceIds.push(inactiveCreated.workspaceId);
+    assert.equal(inactiveCreated.status, "DISABLED");
+    const inactiveLogin = await request("/api/auth/login/lawyer", "POST", null, { email: inactiveValues.email, password: inactiveValues.password });
+    assert.equal(inactiveLogin.status, 401, "disabled practice accounts cannot authenticate");
+
+    const creationAudit = await prisma.securityAuditEvent.findFirst({ where: { targetId: assistantCreated.membershipId, eventType: "PLATFORM_PRACTICE_USER_CREATED" } });
+    assert.equal(creationAudit?.actorUserId, actorId);
+    assert.equal(creationAudit?.metadata && typeof creationAudit.metadata === "object" ? (creationAudit.metadata as Record<string, unknown>).accountType : null, "ASSISTANT");
+
+    const failPracticeAuditSql = `CREATE FUNCTION ${functionName}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type = 'PLATFORM_PRACTICE_USER_CREATED' THEN RAISE EXCEPTION 'test practice audit failure'; END IF; RETURN NEW; END $$`;
+    await prisma.$executeRawUnsafe(failPracticeAuditSql);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER ${triggerName} BEFORE INSERT ON security_audit_events FOR EACH ROW EXECUTE FUNCTION ${functionName}()`);
+    triggerCreated = true;
+    const rollbackValues = { ...practiceBase(`rollback-${randomUUID()}`), accountType: "FIRM", firmName: "Rollback Practice Firm" };
+    const rollbackResponse = await practiceRequest(rollbackValues);
+    assert.equal(rollbackResponse.status, 500);
+    assert.equal(await prisma.user.count({ where: { emailNormalized: rollbackValues.email } }), 0, "audit failure rolls back user and workspace creation");
+    assert.equal(await prisma.practiceWorkspace.count({ where: { name: rollbackValues.firmName } }), 0, "audit failure leaves no orphaned workspace");
+    await prisma.$executeRawUnsafe(`DROP TRIGGER ${triggerName} ON security_audit_events`);
+    await prisma.$executeRawUnsafe(`DROP FUNCTION ${functionName}()`);
+    triggerCreated = false;
 
     for (const invalidQuery of ["page=0", "pageSize=101", "role=PLATFORM_OWNER", "status=LOCKED", "workspaceKind=PERSONAL", "unknown=1"]) {
       assert.equal((await request(`/api/platform-admin/users?${invalidQuery}`)).status, 400, `reject ${invalidQuery}`);
@@ -273,13 +394,25 @@ test("platform user administration is Super Admin-only, bounded, audited, and is
       await prisma.$executeRawUnsafe(`DROP FUNCTION IF EXISTS ${functionName}()`).catch(() => undefined);
     }
     if (fixturesCreated) {
+      const persistedPhotos = practiceCreatedUserIds.length
+        ? await prisma.user.findMany({ where: { id: { in: practiceCreatedUserIds } }, select: { profilePhotoKey: true } }).catch(() => [])
+        : [];
+      const allPhotoKeys = new Set([...profilePhotoKeys, ...persistedPhotos.flatMap((user) => user.profilePhotoKey ? [user.profilePhotoKey] : [])]);
+      await Promise.all([...allPhotoKeys].map((key) => photoStorage?.remove(key)));
       await prisma.$transaction(async (tx) => {
         await tx.securityAuditEvent.deleteMany({ where: { OR: [
           { requestId: { in: requestIds } }, { actorUserId: { in: userIds } }, { targetId: { in: userIds } },
         ] } });
         await tx.platformRoleGrant.deleteMany({ where: { userId: { in: userIds } } });
         await tx.userSession.deleteMany({ where: { userId: { in: userIds } } });
+        await tx.lawyerProfile.deleteMany({ where: { workspaceId: { in: [...workspaceIds, ...practiceCreatedWorkspaceIds] } } });
+        await tx.practiceMembership.deleteMany({ where: { userId: { in: practiceCreatedUserIds }, role: "ASSISTANT" } });
         await tx.practiceMembership.deleteMany({ where: { workspaceId: { in: workspaceIds } } });
+        await tx.practiceMembership.deleteMany({ where: { userId: { in: practiceCreatedUserIds } } });
+        await tx.securityAuditEvent.deleteMany({ where: { targetId: { in: practiceCreatedUserIds } } });
+        await tx.securityAuditEvent.deleteMany({ where: { workspaceId: { in: practiceCreatedWorkspaceIds } } });
+        await tx.practiceWorkspace.deleteMany({ where: { id: { in: practiceCreatedWorkspaceIds } } });
+        await tx.user.deleteMany({ where: { id: { in: practiceCreatedUserIds } } });
         await tx.practiceWorkspace.deleteMany({ where: { id: { in: workspaceIds } } });
         await tx.user.deleteMany({ where: { id: { in: userIds } } });
       }).catch(() => undefined);

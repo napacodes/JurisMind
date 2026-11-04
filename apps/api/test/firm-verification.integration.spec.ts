@@ -80,7 +80,8 @@ test("firm verification is encrypted, tenant-scoped, auditable, private, and rev
         workspaceId: workspaceIds[index]!, userId: userIds[index]!, role: "FIRM_ADMIN", status: "ACTIVE", joinedAt: new Date() })) });
       await tx.platformRoleGrant.create({ data: { id: randomUUID(), userId: superAdmin, role: "SUPER_ADMIN" } });
       await tx.userSession.createMany({ data: sessionIds.map((id, index) => ({ id, userId: userIds[index]!,
-        tokenHash: hashSessionToken(tokens[index]!), expiresAt: new Date(Date.now() + 3_600_000) })) });
+        tokenHash: hashSessionToken(tokens[index]!), audience: index === 2 ? "ADMINISTRATION" as const : "FIRM" as const,
+        expiresAt: new Date(Date.now() + 3_600_000) })) });
     });
     fixturesCreated = true;
 

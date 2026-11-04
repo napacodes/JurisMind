@@ -64,7 +64,8 @@ test("CMS management is Super Admin-only and public reads follow audited publica
     assert.equal((await prisma.$queryRaw<Array<{ name: string }>>`SELECT current_database() AS name`)[0]?.name, "jurismind_auth_test");
     await prisma.user.createMany({ data: actorIds.map((id, index) => ({ id, email: emails[index]!, emailNormalized: emails[index]!, fullName: `Synthetic CMS ${index}` })) });
     await prisma.platformRoleGrant.create({ data: { id: randomUUID(), userId: actorIds[0]!, role: "SUPER_ADMIN" } });
-    await prisma.userSession.createMany({ data: sessionIds.map((id, index) => ({ id, userId: actorIds[index]!, tokenHash: hashSessionToken(tokens[index]!), expiresAt: new Date(Date.now() + 3600_000) })) });
+    await prisma.userSession.createMany({ data: sessionIds.map((id, index) => ({ id, userId: actorIds[index]!, tokenHash: hashSessionToken(tokens[index]!),
+      audience: index === 0 ? "ADMINISTRATION" as const : "FIRM" as const, expiresAt: new Date(Date.now() + 3600_000) })) });
     const module = await Test.createTestingModule({ imports: [PlatformAdminModule] }).overrideProvider(PrismaService).useValue(prisma)
       .overrideProvider(AUTH_ENVIRONMENT).useValue(environment).compile();
     app = module.createNestApplication({ logger: false }); configureCors(app, environment.trustedOrigins); await app.listen(0, "127.0.0.1");

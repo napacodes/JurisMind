@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, test } from 'node:test'
 import { ApiError, allowedWorkspaceNavigation, api, apiBaseUrl, invitationTokenFromFragment, preferredPostLoginDestination, resolveWorkspaceSelection, safeReturnTo } from '../src/lib/api'
-import { individualPracticeSchema, loginSchema } from '../src/lib/auth-schemas'
+import { firmRegistrationSchema, individualPracticeSchema, lawyerRegistrationSchema, loginSchema } from '../src/lib/auth-schemas'
+import { issueReportSchema } from '../src/views/forms/form-validation/registration-demo-schema'
 import { resetTokenFromFragment } from '../src/views/pages/auth/reset-password/reset-password-form'
 import { platformUserListState, platformUserMutationNotice, platformUserStatusAction } from '../src/views/platform-admin/platform-user-ui-state'
 import { navItems, navItemsForPermissions } from '../src/configs/navConfig'
 import { consumeLoginSuccessToast, queueLoginSuccessToast } from '../src/lib/login-success-toast'
+import { z } from 'zod'
 
 const originalFetch = globalThis.fetch
 const originalApiUrl = process.env.NEXT_PUBLIC_API_BASE_URL
@@ -25,6 +27,45 @@ test('login and workspace forms validate input bounds and normalize allowed valu
   assert.deepEqual(individualPracticeSchema.parse({ name: '  Cedar Legal  ' }), { name: 'Cedar Legal' })
   assert.equal(individualPracticeSchema.safeParse({ name: '   ' }).success, false)
   assert.equal(individualPracticeSchema.safeParse({ name: 'x'.repeat(201) }).success, false)
+})
+
+test('Zod 4 preserves registration schema normalization and inferred output', () => {
+  const input = {
+    fullName: ' Alex Lawyer ',
+    email: ' lawyer@example.test ',
+    password: 'correct-horse-battery-staple',
+  }
+  const firm = firmRegistrationSchema.parse({ ...input, firmName: ' Cedar Legal ' })
+  const lawyer = lawyerRegistrationSchema.parse(input)
+
+  assert.deepEqual(firm, { fullName: 'Alex Lawyer', email: 'lawyer@example.test', password: input.password, firmName: 'Cedar Legal' })
+  assert.deepEqual(lawyer, { fullName: 'Alex Lawyer', email: 'lawyer@example.test', password: input.password })
+  assert.equal(firmRegistrationSchema.safeParse({ ...input, firmName: ' ' }).success, false)
+  assert.equal(lawyerRegistrationSchema.safeParse({ ...input, email: 'invalid' }).success, false)
+})
+
+test('Zod 4 issue-report enum keeps the required-field message and valid values', () => {
+  const valid = {
+    name: 'Alex Lawyer', phone: '+1 555 0100', company: 'Cedar Legal', email: 'lawyer@example.test',
+    orderId: 'CASE-123', issue: 'other', department: 'technical', priority: 'medium',
+    selectedOption: 'support', message: 'A sufficiently detailed message describing the issue.',
+  }
+
+  assert.equal(issueReportSchema.safeParse(valid).success, true)
+  const missingSelection = issueReportSchema.safeParse({ ...valid, selectedOption: undefined })
+  assert.equal(missingSelection.success, false)
+  if (!missingSelection.success) {
+    const issue = missingSelection.error.issues.find(({ path }) => path[0] === 'selectedOption')
+    assert.equal(issue?.message, 'Selection of an option is required.')
+  }
+})
+
+test('patched Zod 4 bounds array size before validating oversized collections', () => {
+  const boundedArray = z.array(z.string().min(2)).max(10)
+  const result = boundedArray.safeParse(Array.from({ length: 25_000 }, () => 'x'))
+
+  assert.equal(result.success, false)
+  if (!result.success) assert.equal(result.error.issues.length, 1)
 })
 
 test('API base URL validation rejects credentials and malformed origins', () => {
@@ -71,6 +112,26 @@ test('platform-user API contracts encode bounded filters and use guarded status 
   assert.equal(requests[1]?.init?.method, 'PATCH')
   assert.equal(requests[1]?.init?.body, JSON.stringify({ status: 'DISABLED' }))
   assert.ok(new Headers(requests[1]?.init?.headers).get('X-Request-Id'))
+})
+
+test('practice user creation sends multipart data with request id and retrieves profile photos privately', async () => {
+  const requests: Array<{ url: string; init?: RequestInit }> = []
+  globalThis.fetch = async (input, init) => {
+    requests.push({ url: String(input), init })
+    return String(input).endsWith('/profile-photo')
+      ? new Response(new Blob(['image']), { status: 200 })
+      : new Response(JSON.stringify({ id: 'u1', fullName: 'A User' }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+  }
+  const data = new FormData(); data.set('username', 'a.user')
+  await api.createPracticeUser(data)
+  await api.platformUserProfilePhoto('user/id')
+  assert.equal(requests[0]?.init?.method, 'POST')
+  assert.equal(requests[0]?.init?.body, data)
+  assert.equal(new Headers(requests[0]?.init?.headers).has('Content-Type'), false)
+  assert.ok(new Headers(requests[0]?.init?.headers).get('X-Request-Id'))
+  assert.equal(requests[1]?.url.endsWith('/platform-admin/users/user%2Fid/profile-photo'), true)
+  assert.equal(requests[1]?.init?.credentials, 'include')
+  assert.equal(requests[1]?.init?.cache, 'no-store')
 })
 
 test('platform-user UI states cover loading, error, empty, results, and protected mutations', () => {

@@ -92,7 +92,9 @@ test("lawyer credential verification is private, authorized, audited, and concur
         { id: profileIds[2]!, workspaceId: workspaceIds[1]!, membershipId: membershipIds[3]! },
       ] });
       await tx.platformRoleGrant.create({ data: { id: randomUUID(), userId: superAdmin, role: "SUPER_ADMIN" } });
-      await tx.userSession.createMany({ data: sessionIds.map((id, index) => ({ id, userId: sessionUserIds[index]!, tokenHash: hashSessionToken(tokens[index]!), expiresAt: new Date(Date.now() + 3600_000) })) });
+      await tx.userSession.createMany({ data: sessionIds.map((id, index) => ({ id, userId: sessionUserIds[index]!, tokenHash: hashSessionToken(tokens[index]!),
+        audience: index === 4 ? "ADMINISTRATION" as const : index === 2 ? "ASSISTANT" as const : index === 3 ? "FIRM" as const : "LAWYER" as const,
+        expiresAt: new Date(Date.now() + 3600_000) })) });
     });
     fixturesCreated = true;
 
