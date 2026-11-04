@@ -164,6 +164,9 @@ export const api = {
     for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== '') params.set(key, String(value))
     return apiRequest<PracticeUserPage>(`/platform-admin/users/practice-accounts?${params.toString()}`)
   },
+  practiceUserCreationOptions: () => apiRequest<{ passwordMinLength: number; firms: Array<{ id: string; name: string }>; lawyers: Array<{ id: string; workspace: { id: string; name: string; kind: WorkspaceKind }; user: { fullName: string; email: string } }> }>('/platform-admin/users/practice-accounts/creation-options'),
+  createPracticeUser: (body: FormData) => apiForm<{ id: string; fullName: string; email: string; username: string; status: 'ACTIVE' | 'DISABLED'; role: string; workspaceId: string; membershipId: string }>('/platform-admin/users/practice-accounts', body),
+  platformUserProfilePhoto: (userId: string) => apiDocument(`/platform-admin/users/${encodeURIComponent(userId)}/profile-photo`),
   createPlatformAdmin: (input: { fullName: string; email: string; password: string }) => apiRequest<{
     id: string; email: string; fullName: string; status: 'ACTIVE' | 'DISABLED'; createdAt: string; platformRoles: string[]
   }>('/platform-admin/users', { method: 'POST', body: input, headers: requestHeaders() }),
@@ -338,7 +341,7 @@ export type PlatformUserDetail = Omit<PlatformUserSummary, 'practiceMemberships'
 }
 
 export type PracticeUserPage = {
-  users: Array<{ id: string; email: string; fullName: string; status: 'ACTIVE' | 'DISABLED'; emailVerifiedAt: string | null;
+  users: Array<{ id: string; email: string; fullName: string; username: string | null; hasProfilePhoto: boolean; status: 'ACTIVE' | 'DISABLED'; emailVerifiedAt: string | null;
     createdAt: string; lastLoginAt: string | null; role: 'FIRM' | 'LAWYER' | 'ASSISTANT'; workspaceName: string; joinedAt: string; kycStatus: string; documentStatus: 'SUBMITTED' | 'MISSING' }>
   pagination: { page: number; pageSize: number; total: number; totalPages: number }
   statistics: { total: number; activeToday: number; activeYesterday: number; createdThisWeek: number; createdPreviousWeek: number; kycPending: number; suspended: number; dailyJoins: number[]; dailyActivity: number[] }

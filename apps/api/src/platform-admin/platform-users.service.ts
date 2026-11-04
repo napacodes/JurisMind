@@ -1,21 +1,26 @@
 import {
   ConflictException,
   ForbiddenException,
+  BadRequestException,
   Inject,
   Injectable,
   NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
-import { MembershipRole, UserStatus } from "../generated/prisma/enums";
+import { MembershipRole, MembershipStatus, UserStatus, WorkspaceKind } from "../generated/prisma/enums";
 import { Prisma } from "../generated/prisma/client";
+import { randomUUID } from "node:crypto";
 import { AUTH_ENVIRONMENT, AuthEnvironment } from "../auth/auth.types";
 import { PasswordHasherService } from "../auth/password-hasher.service";
 import { AuthorizationContextService } from "../authorization/authorization-context.service";
 import { AuthorizationService } from "../authorization/authorization.service";
 import { Permission } from "../authorization/permissions";
 import { PrismaService } from "../database/prisma.service";
+import { PrivateDocumentStorage } from "../lawyer-verification/private-document-storage";
 import type { AuthorizationContext } from "../authorization/authorization.types";
 import type { CreatePlatformAdminInput, PlatformUserListQuery, PracticeUserListQuery } from "./platform-users.dto";
+import type { CreatePracticeUserInput, UploadedProfilePhoto } from "./practice-user.dto";
+import { profilePhotoMediaType, validateProfilePhoto } from "./practice-user.dto";
 
 type Transaction = Prisma.TransactionClient;
 
@@ -27,6 +32,7 @@ export class PlatformUsersService {
     @Inject(PasswordHasherService) private readonly passwordHasher: PasswordHasherService,
     @Inject(AuthorizationContextService) private readonly contexts: AuthorizationContextService,
     @Inject(AuthorizationService) private readonly authorization: AuthorizationService,
+    @Inject(PrivateDocumentStorage) private readonly photoStorage: PrivateDocumentStorage,
   ) {}
 
   async list(query: PlatformUserListQuery, actorId: string, sessionId: string) {
@@ -83,7 +89,7 @@ export class PlatformUsersService {
         memberships: { some: membershipScope },
         ...(query.status ? { status: query.status } : {}),
         ...(query.emailStatus ? { emailVerifiedAt: query.emailStatus === "VERIFIED" ? { not: null } : null } : {}),
-        ...(query.search ? { OR: [ { fullName: { contains: query.search, mode: "insensitive" } }, { email: { contains: query.search, mode: "insensitive" } }, { emailNormalized: { contains: query.search.toLowerCase() } } ] } : {}),
+        ...(query.search ? { OR: [ { fullName: { contains: query.search, mode: "insensitive" } }, { email: { contains: query.search, mode: "insensitive" } }, { emailNormalized: { contains: query.search.toLowerCase() } }, { username: { contains: query.search.toLowerCase(), mode: "insensitive" } }, { phoneNumber: { contains: query.search } } ] } : {}),
         ...(query.kycStatus === "PENDING" ? kycPending : {}),
         ...(query.kycStatus === "VERIFIED" ? { AND: [{ OR: [
           { memberships: { some: { status: "ACTIVE", role: "LAWYER", workspace: { is: { status: "ACTIVE" } }, credentialSubmissions: { some: { status: "APPROVED" } } } } },
@@ -101,7 +107,7 @@ export class PlatformUsersService {
       const [total, users, activeTodayIds, activeYesterdayIds, createdThisWeek, createdPreviousWeek, suspended, kycPendingCount, daily, dailyActivity] = await Promise.all([
         tx.user.count({ where: base }),
         tx.user.findMany({ where: base, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (query.page - 1) * query.pageSize, take: query.pageSize,
-          select: { id: true, email: true, fullName: true, status: true, emailVerifiedAt: true, createdAt: true,
+          select: { id: true, email: true, fullName: true, username: true, profilePhotoKey: true, status: true, emailVerifiedAt: true, createdAt: true,
             sessions: { where: { lastSeenAt: { not: null }, audience: { not: "ADMINISTRATION" } }, orderBy: { lastSeenAt: "desc" }, take: 1, select: { lastSeenAt: true } },
             memberships: { where: { status: "ACTIVE", workspace: { is: { status: "ACTIVE" } } }, orderBy: { joinedAt: "desc" },
               select: { id: true, role: true, joinedAt: true, workspace: { select: { id: true, name: true, kind: true,
@@ -137,7 +143,7 @@ export class PlatformUsersService {
         const documentsSubmitted = membership?.role === "FIRM_ADMIN"
           ? (membership.workspace.firmVerifications[0]?.documents.length ?? 0) > 0
           : (membership?.credentialSubmissions[0]?.documents.length ?? 0) > 0;
-        return { id: user.id, email: user.email, fullName: user.fullName, status: user.status, emailVerifiedAt: user.emailVerifiedAt,
+        return { id: user.id, email: user.email, fullName: user.fullName, username: user.username, hasProfilePhoto: Boolean(user.profilePhotoKey), status: user.status, emailVerifiedAt: user.emailVerifiedAt,
           createdAt: user.createdAt, lastLoginAt: user.sessions[0]?.lastSeenAt ?? null,
           role: membership?.role === "FIRM_ADMIN" ? "FIRM" : membership?.role ?? "LAWYER", workspaceName: membership?.workspace.name ?? "Practice account",
           joinedAt: membership?.joinedAt ?? user.createdAt, kycStatus, documentStatus: documentsSubmitted ? "SUBMITTED" : "MISSING" };
@@ -153,13 +159,138 @@ export class PlatformUsersService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
   }
 
+  async practiceUserCreationOptions(actorId: string, sessionId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      await this.requireAdmin(tx, actorId, sessionId);
+      const [firms, lawyers] = await Promise.all([
+        tx.practiceWorkspace.findMany({ where: { kind: WorkspaceKind.FIRM, status: "ACTIVE" }, orderBy: { name: "asc" },
+          select: { id: true, name: true } }),
+        tx.practiceMembership.findMany({ where: { role: MembershipRole.LAWYER, status: MembershipStatus.ACTIVE,
+          workspace: { is: { status: "ACTIVE" } }, user: { is: { status: UserStatus.ACTIVE,
+            platformRoleGrants: { none: { role: "SUPER_ADMIN", revokedAt: null } } } }, lawyerProfile: { isNot: null } },
+          orderBy: [{ workspace: { name: "asc" } }, { user: { fullName: "asc" } }],
+          select: { id: true, workspace: { select: { id: true, name: true, kind: true } },
+            user: { select: { fullName: true, email: true } } } }),
+      ]);
+      return { passwordMinLength: this.environment.passwordMinLength, firms, lawyers };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+  }
+
+  async createPracticeUser(input: CreatePracticeUserInput, rawPhoto: unknown,
+    actorId: string, sessionId: string, requestId: string) {
+    const validatedPhoto = validateProfilePhoto(rawPhoto);
+    const photo = rawPhoto as UploadedProfilePhoto | undefined;
+    let passwordHash: string;
+    try {
+      passwordHash = await this.passwordHasher.hash(input.password, this.environment.passwordMinLength);
+    } catch {
+      throw new BadRequestException(`Password must be at least ${this.environment.passwordMinLength} characters.`);
+    }
+
+    const userId = randomUUID();
+    const photoKey = validatedPhoto ? `${userId}/${randomUUID()}.private` : null;
+    if (photoKey && photo) await this.photoStorage.put(photoKey, photo.buffer);
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await this.requireAdmin(tx, actorId, sessionId);
+        const user = await tx.user.create({ data: {
+          id: userId,
+          email: input.email,
+          emailNormalized: input.email,
+          fullName: input.fullName,
+          username: input.username,
+          countryCode: input.countryCode,
+          phoneNumber: input.phoneNumber,
+          profilePhotoKey: photoKey,
+          passwordHash,
+          status: input.status,
+        }, select: { id: true, fullName: true, email: true, username: true, status: true, createdAt: true } });
+
+        let workspaceId: string;
+        let role: MembershipRole;
+        let isPrimaryLawyer = false;
+        if (input.accountType === "FIRM") {
+          const workspace = await tx.practiceWorkspace.create({ data: {
+            name: input.firmName!, slug: `firm-${randomUUID()}`, kind: WorkspaceKind.FIRM,
+          }, select: { id: true } });
+          workspaceId = workspace.id;
+          role = MembershipRole.FIRM_ADMIN;
+        } else if (input.accountType === "LAWYER" && input.workspaceMode === "FIRM") {
+          const workspace = await tx.practiceWorkspace.findFirst({ where: { id: input.workspaceId, kind: WorkspaceKind.FIRM, status: "ACTIVE" }, select: { id: true } });
+          if (!workspace) throw new BadRequestException("Choose an active firm workspace.");
+          workspaceId = workspace.id;
+          role = MembershipRole.LAWYER;
+        } else if (input.accountType === "LAWYER") {
+          const workspace = await tx.practiceWorkspace.create({ data: {
+            name: input.practiceName ?? `${input.fullName}'s Practice`, slug: `individual-${randomUUID()}`, kind: WorkspaceKind.INDIVIDUAL,
+          }, select: { id: true } });
+          workspaceId = workspace.id;
+          role = MembershipRole.LAWYER;
+          isPrimaryLawyer = true;
+        } else {
+          const supervisor = await tx.practiceMembership.findFirst({ where: {
+            id: input.supervisorMembershipId,
+            role: MembershipRole.LAWYER,
+            status: MembershipStatus.ACTIVE,
+            lawyerProfile: { isNot: null },
+            workspace: { is: { status: "ACTIVE" } },
+            user: { is: { status: UserStatus.ACTIVE, platformRoleGrants: { none: { role: "SUPER_ADMIN", revokedAt: null } } } },
+          }, select: { id: true, workspaceId: true } });
+          if (!supervisor) throw new BadRequestException("Choose an active lawyer with a profile in an active workspace.");
+          workspaceId = supervisor.workspaceId;
+          role = MembershipRole.ASSISTANT;
+        }
+
+        const membership = await tx.practiceMembership.create({ data: {
+          workspaceId,
+          userId,
+          role,
+          status: MembershipStatus.ACTIVE,
+          joinedAt: new Date(),
+          ...(input.accountType === "ASSISTANT" ? { supervisingLawyerMembershipId: input.supervisorMembershipId } : {}),
+        }, select: { id: true } });
+        if (input.accountType === "LAWYER") {
+          await tx.lawyerProfile.create({ data: { workspaceId, membershipId: membership.id, isPrimary: isPrimaryLawyer } });
+        }
+        await tx.securityAuditEvent.create({ data: {
+          actorUserId: actorId,
+          workspaceId,
+          eventType: "PLATFORM_PRACTICE_USER_CREATED",
+          targetType: "PracticeMembership",
+          targetId: membership.id,
+          requestId,
+          metadata: { accountType: input.accountType, role, accountStatus: input.status, hasProfilePhoto: Boolean(photoKey) },
+        } });
+        return { ...user, role, workspaceId, membershipId: membership.id };
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      if (photoKey) await this.photoStorage.remove(photoKey);
+      if (error instanceof BadRequestException || error instanceof ForbiddenException || error instanceof UnauthorizedException) throw error;
+      if (this.isConflict(error)) throw new ConflictException("The account could not be created because the username, email, or workspace state conflicts with another record.");
+      throw error;
+    }
+  }
+
+  async profilePhoto(userId: string, actorId: string, sessionId: string) {
+    const storageKey = await this.prisma.$transaction(async (tx) => {
+      await this.requireAdmin(tx, actorId, sessionId);
+      const user = await tx.user.findUnique({ where: { id: userId }, select: { profilePhotoKey: true } });
+      if (!user?.profilePhotoKey) throw new NotFoundException("Profile image not found.");
+      return user.profilePhotoKey;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead });
+    const bytes = await this.photoStorage.read(storageKey);
+    const mediaType = profilePhotoMediaType(bytes);
+    if (!mediaType) throw new NotFoundException("Profile image not found.");
+    return { bytes, mediaType };
+  }
+
   async get(userId: string, actorId: string, sessionId: string) {
     return this.prisma.$transaction(async (tx) => {
       await this.requireAdmin(tx, actorId, sessionId);
       const user = await tx.user.findUnique({
         where: { id: userId },
         select: {
-          id: true, email: true, fullName: true, status: true, emailVerifiedAt: true, createdAt: true, updatedAt: true,
+          id: true, email: true, fullName: true, username: true, countryCode: true, phoneNumber: true, status: true, emailVerifiedAt: true, createdAt: true, updatedAt: true,
           platformRoleGrants: { where: { revokedAt: null }, orderBy: { grantedAt: "asc" }, select: { role: true, grantedAt: true } },
           memberships: {
             orderBy: { createdAt: "asc" },
@@ -286,6 +417,8 @@ export class PlatformUsersService {
     if (query.search) {
       clauses.push({ OR: [
         { emailNormalized: { contains: query.search.toLowerCase() } },
+        { username: { contains: query.search.toLowerCase(), mode: "insensitive" } },
+        { phoneNumber: { contains: query.search } },
         { email: { contains: query.search, mode: "insensitive" } },
         { fullName: { contains: query.search, mode: "insensitive" } },
       ] });
@@ -346,5 +479,12 @@ export class PlatformUsersService {
     return candidate.code === "P2034" || candidate.meta?.code === "40001" || candidate.meta?.code === "40P01"
       || candidate.meta?.driverAdapterError?.cause?.originalCode === "40001"
       || candidate.meta?.driverAdapterError?.cause?.originalCode === "40P01";
+  }
+
+  private isConflict(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const candidate = error as { code?: unknown; meta?: { code?: unknown; driverAdapterError?: { cause?: { originalCode?: unknown } } } };
+    const codes = [candidate.code, candidate.meta?.code, candidate.meta?.driverAdapterError?.cause?.originalCode];
+    return codes.some((code) => typeof code === "string" && ["P2002", "P2003", "P2034", "23505", "23503", "40001", "40P01"].includes(code));
   }
 }

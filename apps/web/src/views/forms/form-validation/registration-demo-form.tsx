@@ -5,7 +5,6 @@ import * as React from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Controller, useForm } from 'react-hook-form'
 import { toast } from 'sonner'
-import * as z from 'zod'
 
 import { CheckCheckIcon } from 'lucide-react'
 
@@ -17,37 +16,11 @@ import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
-
-// Define the form schema
-const formSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters.'),
-  phone: z
-    .string()
-    .min(1, 'Phone is required')
-    .regex(/^\+?[0-9()\-\s]{8,20}$/, 'Please enter a valid phone number.'),
-  company: z.string().min(2, 'Company name must be at least 2 characters.'),
-  email: z.string().min(1, 'Email is required').email({ message: 'Please enter a valid email address.' }),
-  orderId: z.string().min(3, 'Order ID is required.'),
-  issue: z.string().min(1, {
-    message: 'Kindly select an issue.'
-  }),
-  department: z.string().min(1, {
-    message: 'Kindly select a department.'
-  }),
-  priority: z.string().min(1, {
-    message: 'Kindly select a priority.'
-  }),
-  selectedOption: z.enum(['replace', 'refund', 'support'], {
-    required_error: 'Selection of an option is required.'
-  }),
-  message: z.string().min(50, 'Describe your issue using at least 50 characters.')
-})
-
-type FormValues = z.infer<typeof formSchema>
+import { issueReportSchema, type IssueReportFormValues } from './registration-demo-schema'
 
 const ContactUSFormDemo = () => {
-  const form = useForm<FormValues>({
-    resolver: zodResolver(formSchema),
+  const form = useForm<IssueReportFormValues>({
+    resolver: zodResolver(issueReportSchema),
     defaultValues: {
       name: '',
       phone: '',

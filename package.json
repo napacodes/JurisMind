@@ -11,6 +11,11 @@
     "apps/*",
     "packages/*"
   ],
+  "overrides": {
+    "@nestjs/platform-express": {
+      "multer": "2.5.0"
+    }
+  },
   "scripts": {
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
