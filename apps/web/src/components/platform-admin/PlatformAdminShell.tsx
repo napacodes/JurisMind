@@ -215,11 +215,15 @@ export default function PlatformAdminShell({ children }: { children: ReactNode }
   return (
     <div className='flex min-h-svh w-full min-w-0'>
       <PlatformAdminSidebar />
-      <SidebarInset className='min-h-svh min-w-0'>
+      <SidebarInset className='flex min-h-svh min-w-0 flex-col'>
         <PlatformAdminHeader />
-        <div className='mx-auto w-full max-w-screen-2xl flex-1 px-4 py-5 sm:px-6 sm:py-7'>
+        <main className='mx-auto w-full max-w-screen-2xl flex-1 px-4 py-5 sm:px-6 sm:py-7'>
           {children}
-        </div>
+        </main>
+        <footer className='flex flex-col gap-1 border-t border-border/70 px-4 py-3 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-6'>
+          <p>Copyright © 2026 Nabil HANNACHI | All rights reserved</p>
+          <p>Version: 1.0</p>
+        </footer>
       </SidebarInset>
     </div>
   )

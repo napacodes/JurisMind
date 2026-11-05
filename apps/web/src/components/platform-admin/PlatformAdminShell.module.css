@@ -1,4 +1,5 @@
 .sidebar {
+  font-family: 'Segoe UI', Roboto, sans-serif;
   --sidebar: var(--background);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
@@ -7,6 +8,14 @@
   --sidebar-accent-foreground: var(--accent-foreground);
   --sidebar-border: var(--border);
   --sidebar-ring: var(--ring);
+}
+
+.sidebar :global([data-sidebar='menu-button']:not([data-size='lg'])) {
+  font-size: 14px;
+}
+
+.sidebar :global([data-sidebar='menu-sub-button']) {
+  font-size: 13px;
 }
 
 :global(.dark) .sidebar {
